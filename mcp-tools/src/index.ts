@@ -3,10 +3,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { run } from "./run.js";
-import { PolicyViolation, composeProjectName, validateComposeFiles } from "./policy.js";
-import { captureSnapshot, diffSnapshots } from "./snapshot.js";
-import { appendEvent, readManifest } from "./evidence.js";
+import { readManifest } from "./evidence.js";
+import { composeAction } from "./compose.js";
 
 const WORKSPACE_ROOT = process.env.LUBUBBLE_WORKSPACE_ROOT
   ? path.resolve(process.env.LUBUBBLE_WORKSPACE_ROOT)
@@ -18,43 +16,6 @@ function resolveScope(rel: string, action: string): string {
     throw new Error(`${action} path escapes workspace root: ${rel}`);
   }
   return target;
-}
-
-interface ComposeResult {
-  ok: boolean;
-  exitCode: number | null;
-  output: string;
-  policyViolations: string[];
-  foreignContainerChanges: string[];
-}
-
-async function record(toolName: string, project: string, fn: () => Promise<ComposeResult>) {
-  const started = Date.now();
-  try {
-    const result = await fn();
-    await appendEvent({
-      timestamp: new Date().toISOString(),
-      tool: toolName,
-      project,
-      ...result,
-      durationS: (Date.now() - started) / 1000,
-    });
-    return result;
-  } catch (e) {
-    const violated = e instanceof PolicyViolation;
-    await appendEvent({
-      timestamp: new Date().toISOString(),
-      tool: toolName,
-      project,
-      ok: false,
-      exitCode: null,
-      policyViolations: violated ? [(e as Error).message] : [],
-      foreignContainerChanges: [],
-      output: "",
-      durationS: (Date.now() - started) / 1000,
-    });
-    throw e;
-  }
 }
 
 function toolResult(ok: boolean, output: string) {
@@ -132,50 +93,6 @@ export function createServer() {
     },
   );
 
-  const composeAction = async (toolName: string, args: { project_dir: string; files: string[] }) => {
-    const cwd = resolveScope(args.project_dir, toolName);
-    const project = composeProjectName(path.basename(cwd));
-    const files = args.files?.length ? args.files : ["docker-compose.yml"];
-    const composeFiles = files.flatMap((f) => ["-f", f]);
-
-    return record(toolName, path.basename(cwd), async () => {
-      const before = await captureSnapshot();
-      let exitCode: number | null = null;
-      let output = "";
-      let ok = false;
-      let policyViolations: string[] = [];
-      try {
-        await validateComposeFiles(cwd, files).catch((e: unknown) => {
-          policyViolations = [e instanceof PolicyViolation ? `policy: ${e.message}` : String(e)];
-          throw e;
-        });
-        const composeArgs =
-          toolName === "compose_up"
-            ? ["compose", "-p", project, ...composeFiles, "up", "-d", "--build", "--remove-orphans", "--wait", "--wait-timeout", "180"]
-            : toolName === "compose_down"
-              ? ["compose", "-p", project, ...composeFiles, "down", "--remove-orphans", "--volumes"]
-              : ["compose", "-p", project, ...composeFiles, "logs", "--tail", "200"];
-        const { code, text } = await run("docker", composeArgs, { cwd });
-        exitCode = code;
-        output = text;
-        ok = code === 0;
-      } catch (e) {
-        if (policyViolations.length) {
-          return { ok: false, exitCode: null, output: (e as Error).message, policyViolations, foreignContainerChanges: [] };
-        }
-        throw e;
-      }
-      const after = await captureSnapshot();
-      const { foreignChanges, ownChanges } = diffSnapshots(before, after);
-      if (foreignChanges.length) {
-        ok = false;
-        output += `\nSAFETY: foreign container changes detected: ${foreignChanges.join(", ")}`;
-      }
-      void ownChanges;
-      return { ok, exitCode, output, policyViolations, foreignContainerChanges: foreignChanges };
-    });
-  };
-
   server.tool(
     "compose_up",
     "Validates compose policy, then builds and starts the project's stack",
@@ -185,7 +102,7 @@ export function createServer() {
     },
     async (args) => {
       try {
-        const r = await composeAction("compose_up", args);
+        const r = await composeAction("compose_up", args, { workspaceRoot: WORKSPACE_ROOT });
         return toolResult(r.ok, r.output);
       } catch (e) {
         return toolResult(false, e instanceof Error ? e.message : String(e));
@@ -202,7 +119,7 @@ export function createServer() {
     },
     async (args) => {
       try {
-        const r = await composeAction("compose_down", args);
+        const r = await composeAction("compose_down", args, { workspaceRoot: WORKSPACE_ROOT });
         return toolResult(r.ok, r.output);
       } catch (e) {
         return toolResult(false, e instanceof Error ? e.message : String(e));
@@ -219,7 +136,7 @@ export function createServer() {
     },
     async (args) => {
       try {
-        const r = await composeAction("compose_logs", args);
+        const r = await composeAction("compose_logs", args, { workspaceRoot: WORKSPACE_ROOT });
         return toolResult(r.ok, r.output);
       } catch (e) {
         return toolResult(false, e instanceof Error ? e.message : String(e));

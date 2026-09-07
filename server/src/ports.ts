@@ -1,4 +1,5 @@
 import { promises as fs } from "fs";
+import path from "path";
 import { PORT_REGISTRY_FILE } from "./paths.js";
 
 const DEV_PORT_BASE = 14000;
@@ -16,6 +17,7 @@ async function read(): Promise<Registry> {
 }
 
 async function write(reg: Registry): Promise<void> {
+  await fs.mkdir(path.dirname(PORT_REGISTRY_FILE), { recursive: true });
   await fs.writeFile(PORT_REGISTRY_FILE, JSON.stringify(reg, null, 2));
 }
 
