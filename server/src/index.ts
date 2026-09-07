@@ -53,6 +53,8 @@ export function createApp(): express.Express {
   });
 
   app.delete("/api/projects/:id", async (req, res) => {
+    const { killAgent } = await import("./agent.js");
+    killAgent(req.params.id);
     const result = await deleteProject(req.params.id);
     res.json(result);
   });

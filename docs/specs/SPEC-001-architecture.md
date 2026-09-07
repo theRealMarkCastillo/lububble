@@ -49,9 +49,17 @@ published host ports must use the `${APP_PORT:-...}` variable.
   refused). `agent.ts` injects LLM provider (endpoint/model/key) into an isolated
   `HERMES_HOME` (`~/.lububble/hermes-home/config.yaml`, 0600) so the user's own Hermes
   config is never mutated; retry loop feeds errors back (MAX_ITERATIONS=3).
+  config is never mutated; retry loop feeds errors back (MAX_ITERATIONS=3).
+  **Connection model (fixed):** one long-lived `hermes acp` process per project
+  (pool in `agent.ts`), one session per project reused across turns — prompt
+  turns are `session/prompt` into the same session, so no per-turn agent boot
+  and full conversational memory within a project. Pool processes are killed
+  on project delete and by an idle sweeper (10 min).
   Verified E2E: prompt → file edit → compose_up (policy+snapshot+evidence path) → healthy →
   http_check 200, 1 attempt, 45s. VPN known shapes: ACP update payloads nest
-  `sessionUpdate` under `params.update`.
+  `sessionUpdate` under `params.update`. Pool persistence verified: two consecutive
+  prompts hit the same Hermes PID and the second recalled the first's answer
+  from session memory without re-reading files.
 
 ### M3 — builder UI
 - chat with streaming + Stop + Undo-iteration; preview iframe on proxied port with building overlay; `Preview | Code | Logs | More` tabs; History drawer (git snapshot per iteration); Publish = prod stack panel; LLM settings screen; Docker-not-running detection.
