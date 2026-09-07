@@ -53,6 +53,10 @@ function post(body: unknown): RequestInit {
   return { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
 }
 
+function put(body: unknown): RequestInit {
+  return { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
+}
+
 export const api = {
   listProjects: () => fetch("/api/projects").then((r) => j<{ projects: ProjectRecord[] }>(r)),
 
@@ -70,7 +74,7 @@ export const api = {
     fetch(`/api/projects/${id}/file?path=${encodeURIComponent(path)}`).then((r) => (r.ok ? r.text() : "")),
 
   writeFile: (id: string, path: string, content: string) =>
-    fetch(`/api/projects/${id}/file?path=${encodeURIComponent(path)}`, post({ content })).then((r) => j<{ ok: boolean }>(r)),
+    fetch(`/api/projects/${id}/file?path=${encodeURIComponent(path)}`, put({ content })).then((r) => j<{ ok: boolean }>(r)),
 
   history: (id: string) => fetch(`/api/projects/${id}/history`).then((r) => j<{ history: HistoryEntry[] }>(r)),
 
