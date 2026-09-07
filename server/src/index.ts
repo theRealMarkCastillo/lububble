@@ -183,10 +183,20 @@ export function createApp(): express.Express {
     res.type("text/plain").send(code === 0 ? text : `docker compose logs failed (exit ${code})\n${text}`);
   });
 
+  app.get("/api/projects/:id/chat", async (req, res) => {
+    try {
+      const chat = await import("./chat.js");
+      res.json({ lines: chat.readChat(req.params.id) });
+    } catch (e) {
+      res.status(400).json({ error: (e as Error).message });
+    }
+  });
+
   app.post("/api/projects/:id/prompt/stream", async (req, res) => {
     const text = typeof req.body?.prompt === "string" ? req.body.prompt : "";
     if (!text.trim()) return res.status(400).json({ error: "prompt is required" });
     const { runAgent } = await import("./agent.js");
+    const chat = await import("./chat.js");
     res.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-cache",
@@ -195,9 +205,25 @@ export function createApp(): express.Express {
     const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     req.on("close", () => send("closed", {}));
     try {
-      const result = await runAgent(req.params.id, text, (e) => send("agent", e));
+      chat.appendChatLine(req.params.id, { kind: "u", text }, false);
+      let streamedMessage = false;
+      const result = await runAgent(req.params.id, text, (e) => {
+        if (e.kind === "update") {
+          const mapped = chat.mapAgentUpdateToLines((e.payload as Record<string, unknown>) ?? {});
+          if (mapped && mapped.line.text) {
+            if ((e.payload as { method: string; params: { update: { sessionUpdate?: string } } }).params.update.sessionUpdate === "agent_message_chunk") streamedMessage = true;
+            chat.appendChatLine(req.params.id, mapped.line, mapped.append);
+          }
+        }
+        send("agent", e);
+      });
+      chat.appendChatLine(req.params.id, { kind: "sys", text: `${result.ok ? "done" : "ended"} · ${result.attempts} iteration(s)` }, false);
+      if (!streamedMessage && result.reply?.trim()) {
+        await chat.appendChatLine(req.params.id, { kind: "a", text: result.reply }, false);
+      }
       send("done", result);
     } catch (e) {
+      chat.appendChatLine(req.params.id, { kind: "err", text: `error: ${(e as Error).message}` }, false);
       send("error", { message: (e as Error).message });
     }
     res.end();

@@ -86,6 +86,8 @@ export const api = {
   publish: (id: string) =>
     fetch(`/api/projects/${id}/publish`, { method: "POST" }).then((r) => j<{ ok: boolean; url: string; output: string }>(r)),
 
+  chat: (id: string) => fetch(`/api/projects/${id}/chat`).then((r) => j<{ lines: { kind: string; text: string }[] }>(r)),
+
   devRestart: (id: string) =>
     fetch(`/api/projects/${id}/dev/restart`, { method: "POST" }).then((r) =>
       j<{ ok: boolean; output: string }>(r),

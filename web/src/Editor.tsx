@@ -27,6 +27,10 @@ type Tab = "preview" | "code" | "logs" | "more";export function Editor({ project
   useEffect(() => {
     api.ports(projectId).then((r) => setDevPort(r.ports.dev)).catch(() => {});
     void refreshHistory();
+    api
+      .chat(projectId)
+      .then((r) => setLines((r.lines as ChatLine[]).filter((l) => l && typeof l.text === "string")))
+      .catch(() => {});
   }, [projectId, refreshHistory]);
 
   const addLine = useCallback((line: ChatLine, append: boolean) => {
