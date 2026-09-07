@@ -41,41 +41,6 @@ async function ensureMcpBuild(): Promise<void> {
   }
 }
 
-export async function writeHermesHome(): Promise<string | null> {
-  const home = path.join(CONFIG_DIR, "hermes-home");
-  if (!existsSync(path.join(home, "seeded"))) {
-    await seedHermesHome(home);
-  }
-  await writeProviderOverride(home);
-  return home;
-}
-
-async function seedHermesHome(home: string): Promise<void> {
-  const src = path.join(HOME_DIR, ".hermes");
-  const copyIf = async (rel: string, isDir = false) => {
-    try {
-      const from = path.join(src, rel);
-      await fs.access(from);
-      if (isDir) await fs.cp(from, path.join(home, rel), { recursive: true });
-      else {
-        await fs.mkdir(path.dirname(path.join(home, rel)), { recursive: true });
-        await fs.copyFile(from, path.join(home, rel));
-      }
-    } catch {
-      void 0;
-    }
-  };
-  await copyIf("auth.json");
-  await copyIf("SOUL.md");
-  await copyIf("skills", true);
-  await copyIf("memories", true);
-  const config = await loadConfig();
-  const provider =
-    config.providers.find((p) => p.id === config.defaultProviderId) ?? config.providers[0] ?? null;
-  if (!provider) await copyIf("config.yaml");
-  await fs.writeFile(path.join(home, "seeded"), new Date().toISOString());
-}
-
 async function writeProviderOverride(home: string): Promise<void> {
   const config = await loadConfig();
   const provider =
@@ -93,7 +58,25 @@ async function writeProviderOverride(home: string): Promise<void> {
     "",
   ].join("\n");
   await fs.writeFile(path.join(home, "config.yaml"), yaml, { mode: 0o600 });
-}interface PooledAgent {
+}
+
+export async function writeHermesHome(): Promise<string | null> {
+  const profileHome = path.join(HOME_DIR, ".hermes", "profiles", "lububble");
+  if (!existsSync(path.join(profileHome, "config.yaml"))) {
+    const created = await run(
+      process.env.LUBUBBLE_HERMES_BIN ?? "hermes",
+      ["profile", "create", "lububble", "--clone", "--description", "Lububble app-builder agent: builds and runs generated apps via lububble-tools MCP."],
+      { timeoutMs: 120_000 },
+    );
+    if (created.code !== 0 && !existsSync(path.join(profileHome, "config.yaml"))) {
+      throw new Error(`failed to create the lububble hermes profile: ${created.text.slice(-1500)}`);
+    }
+  }
+  await writeProviderOverride(profileHome);
+  return profileHome;
+}
+
+interface PooledAgent {
   proc: AcpProcess;
   sessionId: string;
   cwd: string;
