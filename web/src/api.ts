@@ -84,7 +84,9 @@ export const api = {
   saveConfig: (config: Config) => fetch("/api/config", post({ config })).then((r) => j<{ config: Config }>(r)),
 
   publish: (id: string) =>
-    fetch(`/api/projects/${id}/publish`, { method: "POST" }).then((r) => j<{ ok: boolean; url: string; output: string }>(r)),
+    fetch(`/api/projects/${id}/publish`, { method: "POST" }).then((r) =>
+      j<{ ok: boolean; url: string; output: string; verified?: boolean; httpStatus?: number; port?: number }>(r),
+    ),
 
   chat: (id: string) => fetch(`/api/projects/${id}/chat`).then((r) => j<{ lines: { kind: string; text: string }[] }>(r)),
 

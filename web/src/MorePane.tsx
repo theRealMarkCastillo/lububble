@@ -10,7 +10,13 @@ export function MorePane({ projectId, onChanged }: { projectId: string; onChange
     setStatus("building and publishing prod stack…");
     try {
       const result = await api.publish(projectId);
-      setStatus(result.ok ? `[OK] ${result.url}\n${result.output.slice(-600)}` : `publish failed\n${result.output}`);
+      if (result.ok && result.verified) {
+        setStatus(`published & verified (HTTP ${result.httpStatus}) → ${result.url}/ (port ${result.port})`);
+      } else if (result.ok) {
+        setStatus(`published → ${result.url} (built OK, URL unverified)\n${result.output.slice(-400)}`);
+      } else {
+        setStatus(`publish failed\n${result.output}`);
+      }
       onChanged();
     } catch (e) {
       setStatus((e as Error).message);

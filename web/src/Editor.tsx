@@ -118,7 +118,13 @@ type Tab = "preview" | "code" | "logs" | "more";export function Editor({ project
     setBusy(true);
     try {
       const result = await api.publish(projectId);
-      setAnnounce(result.ok ? `published → ${result.url}` : `publish failed:\n${result.output}`);
+      if (result.ok && result.verified) {
+        setAnnounce(`published & verified (${result.httpStatus}) → ${result.url}`);
+      } else if (result.ok) {
+        setAnnounce(`published → ${result.url} (unverified)`);
+      } else {
+        setAnnounce(`publish failed:\n${result.output}`);
+      }
       setRefreshKey((k) => k + 1);
     } catch (e) {
       setAnnounce((e as Error).message);
