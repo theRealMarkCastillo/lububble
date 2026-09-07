@@ -52,3 +52,29 @@ Pick one of (in order of preference for a VM deployment):
 project isolation is a VM-phase requirement, design chosen is option 1
 (containerized agent, project-dir-only mounts). Revisit before any
 multi-tenant/port-facing deployment.
+
+## VM deployment shape (what runs where)
+
+One VM (or one VM per user/project later):
+
+- **Docker daemon inside the VM** builds and runs every project's compose
+  stack. Project isolation continues to work inside the VM exactly as the
+  factory model enforces today (per-project networks/volumes/ports).
+- **Exposed to the user**:
+  - builder UI (e.g. `:5173`) and orchestrator API/SSE (`:3001`) — bound on
+    the VM's host-facing interface, protected by an auth token (UI login)
+  - dev preview ports (`14000+`) and publish/prod ports (`15000+`) per
+    allocated registry — these are how the user tests the app they're
+    building, straight in their browser against the VM
+- **Not exposed**: docker socket, db/redis (never published), git
+  per-project repos, secrets (`~/.lububble`, hermes profile home).
+
+Prereqs before flipping this on (from INV-13 / policy posture):
+1. Orchestrator bind becomes config (`LUBUBBLE_HOST`), not hardcoded
+   127.0.0.1, with explicit auth for non-loopback binds.
+2. Port registry owns its ranges and refuses collisions with reserved
+   public ports (already allocated via `${APP_PORT}` only — extend to
+   refuse foreign binds).
+3. Agent boundary per project (containerized hermes agent, project-dir
+   mounts — option 1) before the VM is reachable beyond localhost.
+
