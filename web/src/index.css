@@ -66,3 +66,6 @@ textarea { resize: vertical; }
 .history li { font-size: 12px; padding: 4px 0; border-bottom: 1px solid #222; list-style: none; }
 .publish-status { font-size: 12px; color: #8de08d; }
 .error { color: #ff7b72; }
+
+.chat .log .t { color: #8f8f9c; font-style: italic; font-size: 12px; }
+.chat .log .tc { color: #7fbf7f; font-size: 12px; }

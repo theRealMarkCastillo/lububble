@@ -5,11 +5,9 @@ import { PreviewPane } from "./PreviewPane";
 import { CodePane } from "./CodePane";
 import { LogsPane } from "./LogsPane";
 import { MorePane } from "./MorePane";
-import type { ChatLine } from "./types";
+import { chunkText, planMarker, type ChatLine } from "./types";
 
-type Tab = "preview" | "code" | "logs" | "more";
-
-export function Editor({ projectId }: { projectId: string }) {
+type Tab = "preview" | "code" | "logs" | "more";export function Editor({ projectId }: { projectId: string }) {
   const [tab, setTab] = useState<Tab>("preview");
   const [devPort, setDevPort] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
@@ -34,8 +32,8 @@ export function Editor({ projectId }: { projectId: string }) {
   const addLine = useCallback((line: ChatLine, append: boolean) => {
     setLines((prev) => {
       const last = prev[prev.length - 1];
-      if (append && line.kind === "a" && last?.kind === "a") {
-        return [...prev.slice(0, -1), { kind: "a", text: last.text + line.text }];
+      if (append && line.kind === last?.kind && (line.kind === "a" || line.kind === "t")) {
+        return [...prev.slice(0, -1), { kind: line.kind, text: last.text + line.text }];
       }
       return [...prev, line];
     });
@@ -48,16 +46,25 @@ export function Editor({ projectId }: { projectId: string }) {
     const update = (payload.params as { update?: Record<string, unknown> }).update;
     if (!update) return;
     if (update.sessionUpdate === "agent_message_chunk") {
-      const content = update.content;
-      const text = Array.isArray(content)
-        ? (content as unknown as { text?: string }[]).map((piece) => piece.text ?? "").join("")
-        : ((content as { text?: string } | null)?.text ?? "");
+      const text = chunkText(update.content);
       if (text) addLine({ kind: "a", text }, true);
       return;
     }
+    if (update.sessionUpdate === "agent_thought_chunk") {
+      const text = chunkText(update.content);
+      if (text) addLine({ kind: "t", text }, true);
+      return;
+    }
     if (update.sessionUpdate === "tool_call") {
-      const call = update as { title?: string; status?: string };
-      addLine({ kind: "sys", text: `tool: ${call.title ?? ""} ${call.status ?? ""}` }, false);
+      const call = update as { title?: string; status?: string; kind?: string };
+      addLine({ kind: "tc", text: `▸ ${call.title ?? "tool"}${call.status ? ` · ${call.status}` : ""}` }, false);
+      return;
+    }
+    if (update.sessionUpdate === "plan") {
+      const plan = update as { entries?: { content?: string; status?: string }[] };
+      for (const entry of plan.entries ?? []) {
+        addLine({ kind: "sys", text: `${planMarker(entry.status ?? "")} ${entry.content ?? ""}` }, false);
+      }
     }
   }
 
@@ -65,10 +72,21 @@ export function Editor({ projectId }: { projectId: string }) {
     if (busy || !prompt.trim()) return;
     addLine({ kind: "u", text: prompt }, false);
     setBusy(true);
+    let streamed = false;
+    const trackChunks = (e: AgentEvent) => {
+      handleEvent(e);
+      const payload = e.payload as { method?: string; params?: Record<string, unknown> };
+      if (
+        payload?.method === "session/update" &&
+        (payload.params as { update?: { sessionUpdate?: string } }).update?.sessionUpdate === "agent_message_chunk"
+      ) {
+        streamed = true;
+      }
+    };
     try {
-      const result = await api.promptStream(projectId, prompt, handleEvent);
+      const result = await api.promptStream(projectId, prompt, trackChunks);
       addLine({ kind: "sys", text: `${result.ok ? "done" : "ended"} · ${result.attempts} iteration(s)` }, false);
-      if (result.reply?.trim()) addLine({ kind: "a", text: result.reply }, false);
+      if (!streamed && result.reply?.trim()) addLine({ kind: "a", text: result.reply }, false);
     } catch (e) {
       addLine({ kind: "err", text: `error: ${(e as Error).message}` }, false);
     } finally {
