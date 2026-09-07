@@ -119,6 +119,25 @@ export function createApp(): express.Express {
     res.json(await restore(dir, req.params.hash, `restore ${req.params.hash}`));
   });
 
+  app.post("/api/projects/:id/dev/restart", async (req, res) => {
+    try {
+      const id = req.params.id;
+      const dir = await projectDir(id);
+      const ports = await getPorts(id);
+      if (!ports) return res.status(404).json({ error: "unknown project" });
+      const { composeProjectName } = await import("@lububble/mcp-tools/dist/policy.js");
+      const { validateComposeFiles } = await import("./docker.js");
+      await validateComposeFiles(dir, ["docker-compose.yml"]);
+      const { code, text } = await run("docker", ["compose", "-p", composeProjectName(id), "-f", "docker-compose.yml", "up", "-d", "--build", "--wait", "--wait-timeout", "180"], {
+        cwd: dir,
+        timeoutMs: 600_000,
+      });
+      res.json({ ok: code === 0, url: `http://localhost:${ports.dev}`, output: text.slice(-3000) });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
   app.post("/api/projects/:id/publish", async (req, res) => {
     try {
       const id = req.params.id;

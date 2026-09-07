@@ -148,7 +148,7 @@ type Tab = "preview" | "code" | "logs" | "more";export function Editor({ project
               </button>
             ))}
           </div>
-          {tab === "preview" && <PreviewPane projectId={projectId} devPort={devPort} refreshKey={refreshKey} busy={busy} />}
+          {tab === "preview" && <PreviewPane projectId={projectId} devPort={devPort} refreshKey={refreshKey} busy={busy} onManualRestart={() => void refreshHistory()} />}
           {tab === "code" && <CodePane projectId={projectId} />}
           {tab === "logs" && <LogsPane projectId={projectId} />}
           {tab === "more" && <MorePane projectId={projectId} onChanged={() => void refreshHistory()} />}

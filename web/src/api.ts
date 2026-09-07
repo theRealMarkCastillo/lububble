@@ -86,6 +86,11 @@ export const api = {
   publish: (id: string) =>
     fetch(`/api/projects/${id}/publish`, { method: "POST" }).then((r) => j<{ ok: boolean; url: string; output: string }>(r)),
 
+  devRestart: (id: string) =>
+    fetch(`/api/projects/${id}/dev/restart`, { method: "POST" }).then((r) =>
+      j<{ ok: boolean; output: string }>(r),
+    ),
+
   publishStop: (id: string) =>
     fetch(`/api/projects/${id}/publish/stop`, { method: "POST" }).then((r) => j<{ ok: boolean; output: string }>(r)),
 
