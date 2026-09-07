@@ -22,7 +22,10 @@ ACP-speaking agent. See [PLAN.md](./PLAN.md) for the full plan.
       AGENTS.md, unit coverage for INV-6/7/8/9/10/11/12 (32 tests green), Code-pane save fix.
       Verified end-to-end by scripted API drive + manual pass.
 - [ ] Ticket 5 — Phase B/C UX: device toggle, drafts, preview-edit toolbar (element select/annotate), /goal runs, Plan mode
-- [ ] In-VM agent E2E (provider key settable outside VM — live; needs a working API key provider)
+- [x] **In-VM agent E2E (2026-09-07)**: OrbStack VM (`scripts/install-orb-vm.sh`) with docker +
+      fresh keyless hermes; provider injected at runtime from the host via `PUT /api/config`;
+      project created, agent edited code, compose built inside the VM, verified `BUILT IN THE
+      VM` over `lububble-vm.orb.local:14002` — 3m06s, 1 attempt.
 
 ## Run it
 
