@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Lububble — OrbStack VM bring-up (dev PoC of the future OpenStack/cloud image)
+# Lububble — OrbStack VM bring-up (dev PoC of the future cloud VM image)
 # ============================================================================
 # Installs a fresh Ubuntu VM with: docker, a fresh hermes install (NO personal
 # keys), the lububble orchestration stack, and exposes:
