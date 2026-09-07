@@ -14,7 +14,10 @@ and "publishes" via Docker Compose on the local machine.
   workspace file ops, compose lifecycle (`compose_up|down|logs`), `http_check`,
   `run_history`. All Docker behavior is gated by `policy.ts` and protected by
   `snapshot.ts` (default-deny foreign-container diff) and `evidence.ts`
-  (JSONL manifests in `~/.lububble/runs/`).
+  (JSONL manifests in `~/.lububble/runs/`). NOTE (2026-09-07): the agent no
+  longer attaches this MCP server (`mcpServers: []`); the pack remains the
+  sanctioned surface for headless/factory-scale agents (kanban workers) and
+  its policy/evidence code is also reused server-side.
 - `@lububble/server` — orchestrator HTTP API: project CRUD/scaffold, port
   registry, config/secrets (`~/.lububble/config.json`, 0600), file API,
   (later) ACP client and preview proxy.
@@ -43,13 +46,19 @@ published host ports must use the `${APP_PORT:-...}` variable.
 - [x] POST /api/projects scaffolds template; invalid names rejected (no mutation)
 - [x] file API rejects path escape (`../../`), confirms on write+read-back
 - [x] delete performs compose down + dir removal + port release; unknown ids handled without registry mutation
-- [x] **ACP loop (done, card t_b3c38bd8)**: `server/src/acp.ts` — ndjson JSON-RPC over stdio
-  (`initialize` → `session/new` registering `lububble-tools` MCP via `mcpServers` →
-  `session/prompt`; permission requests auto-resolved to allow; fs/terminal client methods
-  refused). `agent.ts` injects LLM provider (endpoint/model/key) into an isolated
-  `HERMES_HOME` (`~/.lububble/hermes-home/config.yaml`, 0600) so the user's own Hermes
-  config is never mutated; retry loop feeds errors back (MAX_ITERATIONS=3).
-  config is never mutated; retry loop feeds errors back (MAX_ITERATIONS=3).
+- [x] **ACP loop (done, card t_b3c38bd8; updated 2026-09-07)**: `server/src/acp.ts` — ndjson
+  JSON-RPC over stdio (`initialize` → `session/new` with `mcpServers: []` → `session/prompt`;
+  permission requests auto-resolved to allow; fs/terminal client methods refused).
+  The MCP bridge was removed from the agent path — Hermes acts natively on the project
+  workspace (fs + terminal, cwd-pinned). `agent.ts` ensures the agent runs as Hermes's own
+  `lububble` profile (`hermes profile create lububble --clone`, idempotent via profile-home
+  marker; `HERMES_HOME` = the profile dir) so tuning stays in Hermes tooling and the user's
+  own default profile is never mutated. Provider overrides from `PUT /api/config` merge into
+  the profile `config.yaml` (custom provider: `base_url` + `key_env: LUBUBBLE_API_KEY`) and the
+  profile `.env` (0600) on every spawn; pooled agents are killed on provider change. Chat
+  history is restored on project open via `session/list` + `session/load` — Hermes's persisted
+  session store is the source of truth (server holds an in-memory mirror only). Retry loop
+  feeds errors back (MAX_ITERATIONS=3).
   **Connection model (fixed):** one long-lived `hermes acp` process per project
   (pool in `agent.ts`), one session per project reused across turns — prompt
   turns are `session/prompt` into the same session, so no per-turn agent boot

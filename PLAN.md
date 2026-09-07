@@ -16,7 +16,7 @@ pinned production compose stack.
 │ Orchestrator (server, localhost:3001)               │
 │  • project manager + workspace + git snapshots      │
 │  • ACP client (drives any ACP-speaking agent)       │
-│  • MCP tool server: files, docker, health, ports    │
+│  • MCP tool pack available (policy/factory use)     │
 │  • docker compose runner (dev/staging/prod stacks)  │
 │  • preview proxy (iframe/CSP + script-inject hook)  │
 └──────────────┬─────────────────────────────────────┘
@@ -25,7 +25,7 @@ pinned production compose stack.
 │ Agent (Hermes first; any ACP agent)                 │
 │  • owns agent loop + LLM calls                      │
 │  • LLM = OpenAI-format endpoint/model/API key       │
-│  • consumes Lububble MCP tools + skills             │
+│  • acts natively on the project workspace (fs+cmd)  │
 └─────────────────────────────────────────────────────┘
 ```
 

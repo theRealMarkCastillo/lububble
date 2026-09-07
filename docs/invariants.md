@@ -18,7 +18,7 @@ Adopted from software-factory practice.
 | INV-10 | Project names must start with a letter/number and contain only letters, numbers, spaces, `_`, `-`; names are rejected, never silently mutated | projects.ts `slugify` | server/invariants.test.ts (reject `_bad`) |
 | INV-11 | API keys are stored 0600 in `~/.lububble/config.json`, never returned unmasked through the API, never logged | config.ts | server/invariants.test.ts (chmod 0600, masked response, masked-echo keeps stored key) |
 | INV-12 | Teardown is unconditional: compose op always attempts `down` even after a failed `up` (including nonzero exit and thrown paths), and foreign-change detection runs even on failure paths | compose.ts `composeAction` | invariants.test.ts (teardown call asserted on failed up) |
-| INV-13 | Project isolation boundary: **runtime** isolation is hard (per-project compose networks/volumes/ports, INV-1/4/5); **agent** fs boundary is VM-phase work (design = containerized hermes agent with project-dir-only mounts). Until then soft guards apply (cwd-pinned agents, per-project sessions, git snapshots, AGENTS.md scope) | docs/isolation.md | pending VM phase |
+| INV-13 | Project isolation boundary: **runtime** isolation is hard (per-project compose networks/volumes/ports, INV-1/4/5); **agent** fs boundary is VM-phase work (design = containerized hermes agent with project-dir-only mounts). Until then soft guards apply (cwd-pinned agents, per-project sessions, git snapshots, AGENTS.md scope rules, boot-time orphan compose sweep so unregistered `lububble-*` stacks can't squat ports) | docs/isolation.md | pending VM phase (sweep + rules shipped 2026-09-07) |
 
 ## Pending unit coverage (next batch)
 
