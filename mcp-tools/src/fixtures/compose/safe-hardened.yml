@@ -1,0 +1,6 @@
+services:
+  web:
+    image: nginx:alpine
+    user: "0"
+    cap_drop: ["ALL"]
+    read_only: true

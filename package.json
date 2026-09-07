@@ -1,0 +1,15 @@
+{
+  "name": "lububble",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "mcp-tools",
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test:tools": "npm run build -w @lububble/mcp-tools && node mcp-tools/dist/test.js"
+  }
+}

@@ -1,0 +1,100 @@
+import { promises as fs } from "fs";
+import path from "path";
+import { z } from "zod";
+import { PROJECTS_DIR, PROJECT_REGISTRY_FILE } from "./paths.js";
+import { allocatePorts, releasePorts, getPorts } from "./ports.js";
+import { composeDown } from "./docker.js";
+import { fileURLToPath } from "url";
+
+const thisDir = path.dirname(fileURLToPath(import.meta.url));
+const TEMPLATE_DIR = path.resolve(thisDir, "..", "templates", "next-lite");
+
+function slugify(name: string): string {
+  const trimmed = name.trim();
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9 _-]*$/.test(trimmed)) {
+    throw new Error(`project name must start with a letter/number and contain only letters, numbers, spaces, "_" or "-": "${name}"`);
+  }
+  const slug = trimmed.toLowerCase().replace(/\s+/g, "-");
+  return slug;
+}
+
+const RegistrySchema = z.array(
+  z.object({
+    id: z.string(),
+    name: z.string(),
+    createdAt: z.string(),
+  }),
+);
+export type ProjectRecord = z.infer<typeof RegistrySchema>[number];
+
+async function readRegistry(): Promise<ProjectRecord[]> {
+  try {
+    return RegistrySchema.parse(JSON.parse(await fs.readFile(PROJECT_REGISTRY_FILE, "utf8")));
+  } catch {
+    return [];
+  }
+}
+
+async function writeRegistry(list: ProjectRecord[]): Promise<void> {
+  await fs.writeFile(PROJECT_REGISTRY_FILE, JSON.stringify(list, null, 2));
+}
+
+export async function listProjects(): Promise<ProjectRecord[]> {
+  return readRegistry();
+}
+
+export async function createProject(
+  name: string,
+): Promise<{ project: ProjectRecord; ports: { dev: number; prod: number; staging: number } }> {
+  const slug = slugify(name);
+  const registry = await readRegistry();
+  if (registry.some((p) => p.id === slug)) throw new Error(`project "${slug}" already exists`);
+
+  const projectDir = path.join(PROJECTS_DIR, slug);
+  await fs.cp(TEMPLATE_DIR, projectDir, { recursive: true });
+
+  const ports = await allocatePorts(slug);
+  await fs.writeFile(path.join(projectDir, ".env"), `APP_PORT=${ports.dev}\n`, "utf8");
+
+  const record: ProjectRecord = {
+    id: slug,
+    name: name.trim() || slug,
+    createdAt: new Date().toISOString(),
+  };
+  registry.push(record);
+  await writeRegistry(registry);
+  return { project: record, ports };
+}
+
+export async function deleteProject(id: string): Promise<{ ok: boolean; notes: string[] }> {
+  const registry = await readRegistry();
+  const idx = registry.findIndex((p) => p.id === id && /^[a-z0-9][a-z0-9-]*$/.test(id));
+  if (idx === -1) {
+    const safeDir = path.resolve(PROJECTS_DIR, id.replace(/\.\./g, ""));
+    if (safeDir === PROJECTS_DIR || !safeDir.startsWith(PROJECTS_DIR + path.sep)) {
+      return { ok: true, notes: ["unknown project; registry untouched"] };
+    }
+    await fs.rm(safeDir, { recursive: true, force: true });
+    return { ok: true, notes: ["unknown project; removed workspace dir only"] };
+  }
+
+  const notes: string[] = [];
+  const projectDir = path.join(PROJECTS_DIR, id);
+  const ports = await getPorts(id);
+  await releasePorts(id);
+
+  if (await fs.stat(projectDir).then(() => true, () => false).catch(() => false)) {
+    const down = await composeDown(projectDir, id);
+    notes.push(down.ok ? "compose stack stopped" : "compose stop failed (ignored)");
+    await fs.rm(projectDir, { recursive: true, force: true });
+    notes.push("workspace removed");
+  }
+  await writeRegistry(registry.filter((_, i) => i !== idx));
+  notes.push(`released ports: ${JSON.stringify(ports)}`);
+  return { ok: true, notes };
+}
+
+export async function projectDir(id: string): Promise<string> {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) throw new Error("invalid project id");
+  return path.join(PROJECTS_DIR, id);
+}
