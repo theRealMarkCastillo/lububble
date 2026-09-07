@@ -126,15 +126,7 @@ async function spawnAgent(opts: SpawnOptions): Promise<PooledAgent> {
     "session/new",
     {
       cwd: opts.dir,
-      mcpServers: [
-        {
-          name: "lububble-tools",
-          type: "stdio",
-          command: process.execPath,
-          args: [MCP_MAIN],
-          env: [{ name: "LUBUBBLE_WORKSPACE_ROOT", value: opts.dir }],
-        },
-      ],
+      mcpServers: [],
     },
     120_000,
   )) as { sessionId: string };
