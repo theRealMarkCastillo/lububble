@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import multer from "multer";
 import { loadConfig, saveConfig, redactConfig, ConfigSchema, type Config } from "./config.js";
 import { listProjects, createProject, deleteProject, projectDir } from "./projects.js";
 import { getPorts } from "./ports.js";
@@ -7,12 +8,109 @@ import { history, restore } from "./snapshots.js";
 import { run } from "./docker.js";
 import { PROJECTS_DIR } from "./paths.js";
 
+const upload = multer({ storage: multer.memoryStorage() });
+
+const IMAGE_MIME: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+};
+
+function imageMetaById(name: string | null): { isImage: boolean; mimeType?: string } {
+  const ext = name && path.extname(name).toLowerCase();
+  return ext && IMAGE_MIME[ext]
+    ? { isImage: true, mimeType: IMAGE_MIME[ext] }
+    : { isImage: false };
+}
+
+async function ensureUploadsIgnored(dir: string): Promise<void> {
+  const gitignore = path.join(dir, ".gitignore");
+  const fs = await import("fs/promises");
+  let content = "";
+  try {
+    content = await fs.readFile(gitignore, "utf8");
+  } catch {}
+  if (!/^\.uploads\/?$/m.test(content)) {
+    await fs.appendFile(gitignore, `${content.endsWith("\n") || !content ? "" : "\n"}.uploads/\n`, "utf8");
+  }
+}
+
+async function resolveAttachments(
+  projectId: string,
+  raw: unknown,
+): Promise<import("./agent.js").PromptAttachment[]> {
+  if (!Array.isArray(raw)) return [];
+  const fs = await import("fs/promises");
+  const dir = await projectDir(projectId);
+  const base = path.resolve(dir, ".uploads");
+  const out: import("./agent.js").PromptAttachment[] = [];
+  for (const item of raw.slice(0, 6)) {
+    if (!item || typeof item.name !== "string" || !/^[a-zA-Z0-9._-]+$/.test(item.name)) continue;
+    const abs = path.resolve(base, item.name);
+    if (!abs.startsWith(base + path.sep)) continue;
+    const meta = imageMetaById(item.name);
+    const absUnchecked = abs;
+    const exists = await fs
+      .access(abs)
+      .then(() => true)
+      .catch(() => false);
+    if (!exists) continue;
+    out.push({
+      name: item.name,
+      path: path.posix.join(".uploads", item.name),
+      isImage: meta.isImage,
+      mimeType: meta.mimeType,
+    });
+  }
+  return out;
+}
+
 export function createApp(): express.Express {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, name: "lububble", version: "0.2.0" });
+  });
+
+  app.post(
+    "/api/projects/:id/upload",
+    upload.single("file"),
+    async (req: express.Request & { file?: Express.Multer.File }, res) => {
+      try {
+        if (!req.file) return res.status(400).json({ error: "file is required" });
+        if (req.file.size > 10 * 1024 * 1024) return res.status(400).json({ error: "file too large (10MB max)" });
+        const dir = await projectDir(String(req.params.id));
+        const clean = req.file.originalname.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(-80) || "file";
+        const name = `${Date.now()}-${clean}`;
+        const dest = path.join(dir, ".uploads", name);
+        await (await import("fs/promises")).mkdir(path.dirname(dest), { recursive: true });
+        await (await import("fs/promises")).writeFile(dest, req.file.buffer, { mode: 0o600 });
+        const { isImage, mimeType } = imageMetaById(name);
+        await ensureUploadsIgnored(dir);
+        res.status(201).json({ name, path: path.posix.join(".uploads", name), isImage, mimeType });
+      } catch (e) {
+        res.status(400).json({ error: (e as Error).message });
+      }
+    },
+  );
+
+  app.get("/api/projects/:id/uploads/:name", async (req, res) => {
+    try {
+      if (!/^[a-zA-Z0-9._-]+$/.test(String(req.params.name))) return res.status(400).json({ error: "bad name" });
+      const dir = await projectDir(req.params.id);
+      const target = path.resolve(dir, ".uploads", String(req.params.name));
+      if (!target.startsWith(path.resolve(dir, ".uploads") + path.sep)) {
+        return res.status(400).json({ error: "path escapes project" });
+      }
+      const fs = await import("fs/promises");
+      const mime = imageMetaById(String(req.params.name)).mimeType ?? "application/octet-stream";
+      res.type(mime).send(await fs.readFile(target));
+    } catch {
+      res.status(404).json({ error: "not found" });
+    }
   });
 
   app.get("/api/config", async (_req, res) => {
@@ -186,7 +284,8 @@ export function createApp(): express.Express {
   app.get("/api/projects/:id/chat", async (req, res) => {
     try {
       const chat = await import("./chat.js");
-      res.json({ lines: chat.readChat(req.params.id) });
+      const { getChatHistory } = await import("./agent.js");
+      res.json({ lines: await getChatHistory(req.params.id) });
     } catch (e) {
       res.status(400).json({ error: (e as Error).message });
     }
@@ -197,6 +296,7 @@ export function createApp(): express.Express {
     if (!text.trim()) return res.status(400).json({ error: "prompt is required" });
     const { runAgent } = await import("./agent.js");
     const chat = await import("./chat.js");
+    const attachments = await resolveAttachments(req.params.id, req.body?.attachments);
     res.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-cache",
@@ -205,9 +305,16 @@ export function createApp(): express.Express {
     const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     req.on("close", () => send("closed", {}));
     try {
-      chat.appendChatLine(req.params.id, { kind: "u", text }, false);
+      chat.appendChatLine(
+        req.params.id,
+        {
+          kind: "u",
+          text: attachments?.length ? `${text}\n📎 ${attachments.map((a) => a.name).join("  ")}` : text,
+        },
+        false,
+      );
       let streamedMessage = false;
-      const result = await runAgent(req.params.id, text, (e) => {
+      const result = await runAgent(req.params.id, text, attachments, (e) => {
         if (e.kind === "update") {
           const mapped = chat.mapAgentUpdateToLines((e.payload as Record<string, unknown>) ?? {});
           if (mapped && mapped.line.text) {
@@ -234,8 +341,9 @@ export function createApp(): express.Express {
     if (!text.trim()) return res.status(400).json({ error: "prompt is required" });
     const { runAgent } = await import("./agent.js");
     const events: import("./agent.js").AgentEvent[] = [];
+    const attachments = await resolveAttachments(req.params.id, req.body?.attachments);
     try {
-      const result = await runAgent(req.params.id, text, (e) => {
+      const result = await runAgent(req.params.id, text, attachments, (e) => {
         events.push(e);
       });
       res.json({ ...result, eventCount: events.length });

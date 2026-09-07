@@ -69,3 +69,31 @@ textarea { resize: vertical; }
 
 .chat .log .t { color: #8f8f9c; font-style: italic; font-size: 12px; }
 .chat .log .tc { color: #7fbf7f; font-size: 12px; }
+
+.chat form textarea { flex: 1; }
+.chat form { display: flex; gap: 8px; align-items: flex-end; }
+.attach {
+  background: #1d1d24;
+  color: #9aa0a6;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 15px;
+}
+.attach-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.attach-row.pending { margin-bottom: 6px; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #26262b;
+  border: 1px solid #33333a;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: #d7d7dc;
+  text-decoration: none;
+}
+.chip img { height: 28px; width: 28px; object-fit: cover; border-radius: 4px; }
+.chip-x { background: none; border: none; color: #8b8b95; cursor: pointer; font-size: 14px; padding: 0 2px; }

@@ -47,10 +47,17 @@ export function planMarker(status: string): string {
   return "[ ]";
 }
 
-export function mapAgentUpdateToLines(payload: Record<string, unknown>): { line: ChatLine; append: boolean } | null {
-  const update = (payload as { update?: Record<string, unknown> })?.update;
+export function mapAgentUpdateToLines(
+  payload: { method: string; params: Record<string, unknown> } | Record<string, unknown>,
+): { line: ChatLine; append: boolean } | null {
+  const params = (payload as { params?: Record<string, unknown> })?.params ?? (payload as { update?: Record<string, unknown> });
+  const update = (params as { update?: Record<string, unknown> })?.update;
   if (!update) return null;
   if (update.sessionUpdate === "agent_message_chunk") return { line: { kind: "a", text: chunkText(update.content) }, append: true };
+  if (update.sessionUpdate === "user_message_chunk") {
+    const text = chunkText(update.content);
+    return text ? { line: { kind: "u", text }, append: false } : null;
+  }
   if (update.sessionUpdate === "agent_thought_chunk") return { line: { kind: "t", text: chunkText(update.content) }, append: true };
   if (update.sessionUpdate === "tool_call") {
     const call = update as { title?: string; status?: string };

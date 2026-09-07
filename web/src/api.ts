@@ -88,6 +88,15 @@ export const api = {
 
   chat: (id: string) => fetch(`/api/projects/${id}/chat`).then((r) => j<{ lines: { kind: string; text: string }[] }>(r)),
 
+  uploadsUrl: (id: string, name: string) => `/api/projects/${id}/uploads/${encodeURIComponent(name)}`,
+
+  async upload(id: string, file: File): Promise<{ name: string; path: string; isImage: boolean; mimeType?: string }> {
+    const form = new FormData();
+    form.append("file", file);
+    const r = await fetch(`/api/projects/${id}/upload`, { method: "POST", body: form });
+    return j<{ name: string; path: string; isImage: boolean; mimeType?: string }>(r);
+  },
+
   devRestart: (id: string) =>
     fetch(`/api/projects/${id}/dev/restart`, { method: "POST" }).then((r) =>
       j<{ ok: boolean; output: string }>(r),
@@ -96,8 +105,14 @@ export const api = {
   publishStop: (id: string) =>
     fetch(`/api/projects/${id}/publish/stop`, { method: "POST" }).then((r) => j<{ ok: boolean; output: string }>(r)),
 
-  async promptStream(id: string, prompt: string, onEvent: (e: AgentEvent) => void): Promise<AgentDone> {
-    const response = await fetch(`/api/projects/${id}/prompt/stream`, post({ prompt }));
+  async promptStream(
+    id: string,
+    prompt: string,
+    attachments: { name: string }[],
+    onEvent: (e: AgentEvent) => void,
+  ): Promise<AgentDone> {
+    const response = await fetch(`/api/projects/${id}/prompt/stream`, post({ prompt, attachments }));
+    if (!response.ok || !response.body) throw new Error(`prompt stream failed (${response.status})`);
     if (!response.ok || !response.body) throw new Error(`prompt stream failed (${response.status})`);
     const reader = (response.body as ReadableStream<Uint8Array>).getReader();
     const decoder = new TextDecoder();

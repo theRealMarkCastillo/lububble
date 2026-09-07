@@ -80,6 +80,7 @@ interface PooledAgent {
   proc: AcpProcess;
   sessionId: string;
   cwd: string;
+  resumed: boolean;
   lastUsed: number;
 }
 
@@ -99,7 +100,30 @@ idleSweeper.unref?.();
 interface SpawnOptions {
   projectId: string;
   dir: string;
+  replay: boolean;
   onUpdate?: (event: AgentEvent) => void;
+}
+
+interface SessionListInfo {
+  sessionId?: string;
+  session_id?: string;
+  updatedAt?: string | null;
+  updated_at?: string | null;
+}
+
+async function newestSessionId(proc: AcpProcess, dir: string): Promise<string | null> {
+  let res: { sessions?: SessionListInfo[] } | undefined;
+  try {
+    res = (await proc.request("session/list", { cwd: dir }, 30_000)) as {
+      sessions?: SessionListInfo[];
+    };
+  } catch {
+    return "";
+  }
+  const sessions = res?.sessions?.filter((s) => s.sessionId || s.session_id) ?? [];
+  if (!sessions.length) return "";
+  sessions.sort((a, b) => String(b.updatedAt ?? b.updated_at ?? "").localeCompare(String(a.updatedAt ?? a.updated_at ?? "")) || 0);
+  return sessions[0].sessionId ?? sessions[0].session_id ?? "";
 }
 
 async function spawnAgent(opts: SpawnOptions): Promise<PooledAgent> {
@@ -122,6 +146,37 @@ async function spawnAgent(opts: SpawnOptions): Promise<PooledAgent> {
     },
     60_000,
   );
+  if (opts.replay) {
+    const chat = await import("./chat.js");
+    const listener = (u: AcpSessionUpdate) => {
+      const mapped = chat.mapAgentUpdateToLines(u);
+      if (mapped) chat.appendChatLine(opts.projectId, mapped.line, mapped.append);
+    };
+    proc.updates.on("update", listener);
+    try {
+      const previousId = await newestSessionId(proc, opts.dir);
+      console.log(`[chat-history] newest session for ${opts.dir}: ${previousId || "(none)"}`);
+      if (previousId) {
+        try {
+          const loaded = (await proc.request(
+            "session/load",
+            { cwd: opts.dir, sessionId: previousId, mcpServers: [] },
+            120_000,
+          )) as { sessionId?: string } | null;
+          if (loaded) {
+            const chat2 = await import("./chat.js");
+            console.log(`[chat-history] load OK, mirror lines: ${chat2.readChat(opts.projectId).length}`);
+            return { proc, sessionId: previousId, cwd: opts.dir, resumed: true, lastUsed: Date.now() };
+          }
+        } catch (loadErr) {
+          console.error(`[chat-history] session/load failed: ${(loadErr as Error).message.slice(0, 300)}`);
+          loadFailureLog(previousId);
+        }
+      }
+    } finally {
+      proc.updates.removeListener("update", listener);
+    }
+  }
   const session = (await proc.request(
     "session/new",
     {
@@ -130,7 +185,11 @@ async function spawnAgent(opts: SpawnOptions): Promise<PooledAgent> {
     },
     120_000,
   )) as { sessionId: string };
-  return { proc, sessionId: session.sessionId, cwd: opts.dir, lastUsed: Date.now() };
+  return { proc, sessionId: session.sessionId, cwd: opts.dir, resumed: false, lastUsed: Date.now() };
+}
+
+function loadFailureLog(_sessionId: string): void {
+  console.error("hermes session/load failed; falling back to session/new");
 }
 
 function textOf(updates: AcpSessionUpdate[]): string {
@@ -156,9 +215,17 @@ function textOf(updates: AcpSessionUpdate[]): string {
   return parts.join("");
 }
 
+export interface PromptAttachment {
+  name: string;
+  path: string;
+  isImage: boolean;
+  mimeType?: string;
+}
+
 export async function runAgent(
   projectId: string,
   text: string,
+  attachments: PromptAttachment[] = [],
   onUpdate?: (event: AgentEvent) => void,
 ): Promise<AgentRunResult> {
   if (!(await listProjects()).some((p) => p.id === projectId)) {
@@ -170,7 +237,8 @@ export async function runAgent(
   let pooled = pool.get(projectId);
   if (!pooled || pooled.proc.exited || pooled.cwd !== dir) {
     if (pooled && !pooled.proc.exited) pooled.proc.kill();
-    pooled = await spawnAgent({ projectId, dir, onUpdate });
+    const chat = await import("./chat.js");
+    pooled = await spawnAgent({ projectId, dir, replay: chat.readChat(projectId).length === 0, onUpdate });
     pool.set(projectId, pooled);
   }
   let pooled_ = pooled;
@@ -180,6 +248,7 @@ export async function runAgent(
   let current = text;
   let reply = "";
   let lastError: Error | null = null;
+  let atts = attachments;
   while (attempt <= MAX_ITERATIONS) {
     const collected: AcpSessionUpdate[] = [];
     const listener = (u: AcpSessionUpdate) => {
@@ -191,7 +260,7 @@ export async function runAgent(
     try {
       const result = (await pooled_.proc.request(
         "session/prompt",
-        { sessionId: pooled_.sessionId, prompt: [{ type: "text", text: current }] },
+        { sessionId: pooled_.sessionId, prompt: await buildPromptBlocks(current, atts, dir) },
         PROMPT_TIMEOUT_MS,
       )) as { stopReason?: string };
       reply = extractText(collected);
@@ -209,7 +278,7 @@ export async function runAgent(
       lastError = thrown;
       if (pooled_.proc.exited) {
         try {
-          const fresh = await spawnAgent({ projectId, dir, onUpdate });
+          const fresh = await spawnAgent({ projectId, dir, replay: false, onUpdate });
           pool.set(projectId, fresh);
           pooled_ = fresh;
         } catch (spawnErr) {
@@ -222,10 +291,52 @@ export async function runAgent(
     lastError = thrown;
     if (attempt >= MAX_ITERATIONS) break;
     attempt += 1;
+    atts = [];
     current = `Previous attempt failed or ended without fulfilling the task. Error: ${lastError.message}. Continue working as instructed until the task is verified complete, then finish.`;
     onUpdate?.({ kind: "iteration", attempt, payload: { error: lastError.message } });
   }
   return { ok: false, reply, attempts: attempt };
+}
+
+async function buildPromptBlocks(
+  text: string,
+  attachments: PromptAttachment[],
+  dir: string,
+): Promise<{ type: string; text?: string; data?: string; mimeType?: string }[]> {
+  const blocks: { type: string; text?: string; data?: string; mimeType?: string }[] = [];
+  const fs = await import("fs");
+  for (const att of attachments) {
+    if (att.isImage && att.mimeType) {
+      const data = await fs.promises.readFile(path.join(dir, att.path), "base64");
+      blocks.push({ type: "image", data, mimeType: att.mimeType });
+    } else {
+      blocks.push({
+        type: "text",
+        text: `User attached a file: ${att.name} (available in the project directory at ${att.path}).`,
+      });
+    }
+  }
+  blocks.push({ type: "text", text });
+  return blocks;
+}
+
+export async function getChatHistory(projectId: string): Promise<unknown[]> {
+  if (!(await listProjects()).some((p) => p.id === projectId)) {
+    throw new Error(`unknown project: ${projectId}`);
+  }
+  const chat = await import("./chat.js");
+  if (chat.readChat(projectId).length > 0) return chat.readChat(projectId);
+  const dir = await projectDir(projectId);
+  let pooled = pool.get(projectId);
+  if (pooled && !pooled.resumed && !pooled.proc.exited && pooled.cwd === dir) {
+    pooled.proc.kill();
+    pooled = undefined;
+  }
+  if (!pooled || pooled.proc.exited || pooled.cwd !== dir) {
+    pooled = await spawnAgent({ projectId, dir, replay: true });
+    pool.set(projectId, pooled);
+  }
+  return chat.readChat(projectId);
 }
 
 export function extractText(

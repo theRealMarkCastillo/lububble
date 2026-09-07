@@ -72,7 +72,7 @@ type Tab = "preview" | "code" | "logs" | "more";export function Editor({ project
     }
   }
 
-  async function send(prompt: string) {
+  async function send(prompt: string, attachments: { name: string }[] = []) {
     if (busy || !prompt.trim()) return;
     addLine({ kind: "u", text: prompt }, false);
     setBusy(true);
@@ -88,7 +88,7 @@ type Tab = "preview" | "code" | "logs" | "more";export function Editor({ project
       }
     };
     try {
-      const result = await api.promptStream(projectId, prompt, trackChunks);
+      const result = await api.promptStream(projectId, prompt, attachments, trackChunks);
       addLine({ kind: "sys", text: `${result.ok ? "done" : "ended"} · ${result.attempts} iteration(s)` }, false);
       if (!streamed && result.reply?.trim()) addLine({ kind: "a", text: result.reply }, false);
     } catch (e) {
@@ -143,7 +143,7 @@ type Tab = "preview" | "code" | "logs" | "more";export function Editor({ project
         </button>
       </div>
       <div className="editor">
-        <ChatPanel projectId={projectId} lines={lines} addLine={addLine} onSend={(p) => void send(p)} busy={busy} />
+        <ChatPanel projectId={projectId} lines={lines} addLine={addLine} onSend={(p, atts) => void send(p, atts)} busy={busy} />
         <div className="main">
           <div className="tabs">
             {(["preview", "code", "logs", "more"] as Tab[]).map((t) => (
