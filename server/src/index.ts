@@ -2,13 +2,17 @@ import express from "express";
 import path from "path";
 import { loadConfig, saveConfig, redactConfig, ConfigSchema, type Config } from "./config.js";
 import { listProjects, createProject, deleteProject, projectDir } from "./projects.js";
+import { getPorts } from "./ports.js";
+import { history, restore } from "./snapshots.js";
+import { run } from "./docker.js";
+import { PROJECTS_DIR } from "./paths.js";
 
 export function createApp(): express.Express {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
 
   app.get("/api/health", (_req, res) => {
-    res.json({ ok: true, name: "lububble", version: "0.1.0" });
+    res.json({ ok: true, name: "lububble", version: "0.2.0" });
   });
 
   app.get("/api/config", async (_req, res) => {
@@ -23,7 +27,7 @@ export function createApp(): express.Express {
     const merged: Config = {
       defaultProviderId: incoming.defaultProviderId,
       providers: incoming.providers.map((p) => {
-        if (!p.apiKey.includes("••")) return p;
+        if (!p.apiKey.includes("•")) return p;
         const existing = current.providers.find((c) => c.id === p.id);
         return { ...p, apiKey: existing?.apiKey ?? "" };
       }),
@@ -52,42 +56,92 @@ export function createApp(): express.Express {
     res.json(result);
   });
 
-  app.get("/api/projects/:id/files", async (req, res) => {
+  app.get("/api/projects/:id/ports", async (req, res) => {
     try {
-      const dir = await projectDir(req.params.id);
-      const { walk } = await import("./walk.js");
-      const files = await walk(dir, dir);
-      res.json({ files });
-    } catch (e) {
-      res.status(400).json({ error: (e as Error).message });
-    }
-  });
-
-  app.get("/api/projects/:id/file", async (req, res) => {
-    try {
-      const dir = await projectDir(req.params.id);
-      const rel = String(req.query.path ?? "");
-      const target = path.resolve(dir, rel);
-      if (!target.startsWith(dir + path.sep)) return res.status(400).json({ error: "path escapes project" });
-      res.type("text/plain").send(await (await import("fs/promises")).readFile(target, "utf8"));
+      let ports = await getPorts(req.params.id);
+      if (!ports) {
+        const { allocatePorts } = await import("./ports.js");
+        ports = await allocatePorts(req.params.id);
+      }
+      res.json({ ports });
     } catch {
-      res.status(404).json({ error: "not found" });
+      res.status(404).json({ error: "unknown project" });
     }
   });
 
-  app.put("/api/projects/:id/file", express.json({ limit: "8mb", type: ["application/json", "text/plain"] }), async (req, res) => {
+  app.get("/api/projects/:id/history", async (req, res) => {
+    const dir = await projectDir(req.params.id);
+    res.json({ history: await history(dir) });
+  });
+
+  app.post("/api/projects/:id/history/:hash/restore", async (req, res) => {
+    const dir = await projectDir(req.params.id);
+    res.json(await restore(dir, req.params.hash, `restore ${req.params.hash}`));
+  });
+
+  app.post("/api/projects/:id/publish", async (req, res) => {
     try {
-      const dir = await projectDir(req.params.id);
-      const rel = String(req.query.path ?? "");
-      const target = path.resolve(dir, rel);
-      if (!target.startsWith(dir + path.sep)) return res.status(400).json({ error: "path escapes project" });
-      const fs = await import("fs/promises");
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, req.body?.content ?? "", "utf8");
-      res.json({ ok: true });
+      const id = req.params.id;
+      const dir = await projectDir(id);
+      const ports = await getPorts(id);
+      if (!ports) return res.status(404).json({ error: "unknown project" });
+      const { code, text } = await run("docker", ["compose", "-p", `lububble-${id}-prod`, "-f", "docker-compose.prod.yml", "up", "-d", "--build", "--wait", "--wait-timeout", "180"], {
+        cwd: dir,
+        timeoutMs: 600_000,
+        env: { APP_PORT: String(ports.prod) },
+      });
+      const { text: envOut } = { text: "" };
+      void envOut;
+      res.json({ ok: code === 0, port: ports.prod, url: `http://localhost:${ports.prod}`, output: text.slice(-4000) });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  app.post("/api/projects/:id/publish/stop", async (req, res) => {
+    try {
+      const id = req.params.id;
+      const dir = await projectDir(id);
+      const { code, text } = await run("docker", ["compose", "-p", `lububble-${id}-prod`, "-f", "docker-compose.prod.yml", "down", "--remove-orphans"], {
+        cwd: dir,
+        timeoutMs: 120_000,
+      });
+      res.json({ ok: code === 0, output: text.slice(-2000) });
     } catch (e) {
       res.status(400).json({ error: (e as Error).message });
     }
+  });
+
+  app.get("/api/projects/:id/logs", async (req, res) => {
+    const id = req.params.id;
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) return res.status(400).json({ error: "invalid id" });
+    const dir = path.join(PROJECTS_DIR, id);
+    const { composeProjectName } = await import("@lububble/mcp-tools/dist/policy.js");
+    const { code, text } = await run("docker", ["compose", "-p", composeProjectName(id), "logs", "--tail", "200"], {
+      cwd: dir,
+      timeoutMs: 60_000,
+    });
+    res.type("text/plain").send(code === 0 ? text : `docker compose logs failed (exit ${code})\n${text}`);
+  });
+
+  app.post("/api/projects/:id/prompt/stream", async (req, res) => {
+    const text = typeof req.body?.prompt === "string" ? req.body.prompt : "";
+    if (!text.trim()) return res.status(400).json({ error: "prompt is required" });
+    const { runAgent } = await import("./agent.js");
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+    const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    req.on("close", () => send("closed", {}));
+    try {
+      const result = await runAgent(req.params.id, text, (e) => send("agent", e));
+      send("done", result);
+    } catch (e) {
+      send("error", { message: (e as Error).message });
+    }
+    res.end();
   });
 
   app.post("/api/projects/:id/prompt", async (req, res) => {
@@ -105,5 +159,52 @@ export function createApp(): express.Express {
     }
   });
 
+  app.use("/preview/:id", (async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const id = (req.params as { id: string }).id;
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) return next();
+    const ports = await getPorts(id);
+    if (!ports) return res.status(404).json({ error: "unknown project" });
+    try {
+      const upstream = await fetch(`http://127.0.0.1:${ports.dev}${req.url}`, {
+        headers: { host: `localhost:${ports.dev}` },
+        redirect: "manual",
+      });
+      let body = upstream.body;
+      if (!body) {
+        res.status(upstream.status).send("");
+        return;
+      }
+      unsafeHeadersInto(upstream.headers, res);
+      res.type(upstream.headers.get("content-type") ?? "application/octet-stream");
+      const reader = body.getReader();
+      res.on("close", () => reader.cancel());
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(value);
+      }
+      res.end();
+    } catch {
+      res.status(502).json({ error: "app container not reachable (is the stack up?)" });
+    }
+  }) as express.RequestHandler);
+
   return app;
+}
+
+const BLOCKED_PREVIEW_HEADERS = new Set([
+  "content-security-policy",
+  "x-frame-options",
+  "strict-transport-security",
+  "transfer-encoding",
+  "connection",
+  "keep-alive",
+  "content-length",
+]);
+
+function unsafeHeadersInto(upstreamHeaders: Headers, res: express.Response): void {
+  upstreamHeaders.forEach((value, key) => {
+    if (BLOCKED_PREVIEW_HEADERS.has(key.toLowerCase())) return;
+    res.setHeader(key, value);
+  });
 }

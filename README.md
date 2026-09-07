@@ -14,7 +14,18 @@ ACP-speaking agent. See [PLAN.md](./PLAN.md) for the full plan.
       chmod 600), file API (path-escape protected). Validated E2E: scaffold → compose build →
       healthy → serves on allocated port → delete (down + cleanup).
 - [x] **Ticket 3 — ACP client**: `server/src/acp.ts` (ndjson JSON-RPC client: initialize, session/new with MCP servers, session/prompt, permission auto-allow) + `agent.ts` (provider-injected HERMES_HOME config, retry loop). E2E verified: agent edited code, compose_up via policy-gated tools, healthy, http_check 200 — 45s, 1 attempt.
-- [ ] Ticket 4 — Web UI (chat, preview, history, publish)
+- [x] **Ticket 4 — UI phase A** (`web/`): dashboard, editor (chat with SSE streaming, preview iframe proxy, Code/Logs/History/More tabs), LLM provider settings (isolated Hermes injection), Publish panel (git snapshot + prod compose stack). Verified live: SSE-driven agent loop built & verified an app through the browser; prod stack serves on its own port.
+- [ ] Ticket 5 — Phase B/C UX: device toggle, drafts, preview-edit toolbar (element select/annotate), /goal runs, Plan mode
+- [ ] Unit coverage for pending invariants (INV-6/7/8/11/12)
+
+## Run it
+
+```sh
+npm install
+npm run build -w @lububble/mcp-tools -w @lububble/server
+node server/dist/main.js &        # orchestrator on 127.0.0.1:3001
+cd web && npx vite                # UI on http://localhost:5173
+```
 
 ## Layout
 

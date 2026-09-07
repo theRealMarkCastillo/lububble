@@ -39,11 +39,19 @@ published host ports must use the `${APP_PORT:-...}` variable.
 - [x] every compose op leaves a JSONL evidence record (tool, exit, violations, foreign container changes, duration)
 - [x] policy test suite passes (node --test)
 
-### M2 — orchestrator (done, extend for ACP)
+### M2 — orchestrator (done)
 - [x] POST /api/projects scaffolds template; invalid names rejected (no mutation)
 - [x] file API rejects path escape (`../../`), confirms on write+read-back
 - [x] delete performs compose down + dir removal + port release; unknown ids handled without registry mutation
-- [ ] ACP client drives an ACP agent (Hermes) with provider config injected; agent can call every MCP tool (loop: prompt → edits → build → healthy → error feedback on failure, max N retries)
+- [x] **ACP loop (done, card t_b3c38bd8)**: `server/src/acp.ts` — ndjson JSON-RPC over stdio
+  (`initialize` → `session/new` registering `lububble-tools` MCP via `mcpServers` →
+  `session/prompt`; permission requests auto-resolved to allow; fs/terminal client methods
+  refused). `agent.ts` injects LLM provider (endpoint/model/key) into an isolated
+  `HERMES_HOME` (`~/.lububble/hermes-home/config.yaml`, 0600) so the user's own Hermes
+  config is never mutated; retry loop feeds errors back (MAX_ITERATIONS=3).
+  Verified E2E: prompt → file edit → compose_up (policy+snapshot+evidence path) → healthy →
+  http_check 200, 1 attempt, 45s. VPN known shapes: ACP update payloads nest
+  `sessionUpdate` under `params.update`.
 
 ### M3 — builder UI
 - chat with streaming + Stop + Undo-iteration; preview iframe on proxied port with building overlay; `Preview | Code | Logs | More` tabs; History drawer (git snapshot per iteration); Publish = prod stack panel; LLM settings screen; Docker-not-running detection.

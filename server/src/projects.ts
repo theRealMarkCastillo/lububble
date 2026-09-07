@@ -3,7 +3,8 @@ import path from "path";
 import { z } from "zod";
 import { PROJECTS_DIR, PROJECT_REGISTRY_FILE } from "./paths.js";
 import { allocatePorts, releasePorts, getPorts } from "./ports.js";
-import { composeDown } from "./docker.js";
+import { composeDown, validateComposeFiles } from "./docker.js";
+import { gitInit } from "./snapshots.js";
 import { fileURLToPath } from "url";
 
 const thisDir = path.dirname(fileURLToPath(import.meta.url));
@@ -55,6 +56,7 @@ export async function createProject(
 
   const ports = await allocatePorts(slug);
   await fs.writeFile(path.join(projectDir, ".env"), `APP_PORT=${ports.dev}\n`, "utf8");
+  await gitInit(projectDir);
 
   const record: ProjectRecord = {
     id: slug,

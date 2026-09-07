@@ -2,6 +2,7 @@ import { AcpProcess, type AcpSessionUpdate } from "./acp.js";
 import { loadConfig } from "./config.js";
 import { listProjects, projectDir } from "./projects.js";
 import { run } from "./docker.js";
+import { snapshot } from "./snapshots.js";
 import { promises as fs } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -122,6 +123,9 @@ export async function runAgent(
           PROMPT_TIMEOUT_MS,
         )) as { stopReason?: string };
         reply = extractText(collected);
+        const snapshotMessage = `iteration ${attempt}: ${text.slice(0, 120)}`;
+        const snap = await snapshot(dir, snapshotMessage);
+        onUpdate?.({ kind: "iteration", attempt, payload: { snapshot: snap.detail } });
         if (result?.stopReason === "end_turn") {
           return { ok: true, reply, attempts: attempt };
         }
