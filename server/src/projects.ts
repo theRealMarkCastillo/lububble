@@ -8,7 +8,12 @@ import { gitInit } from "./snapshots.js";
 import { fileURLToPath } from "url";
 
 const thisDir = path.dirname(fileURLToPath(import.meta.url));
-const TEMPLATE_DIR = path.resolve(thisDir, "..", "templates", "next-lite");
+const TEMPLATE_ROOT = path.resolve(thisDir, "..", "templates");
+const TEMPLATE_NAMES = new Set(["next-lite", "next-postgres"]);
+const TEMPLATE_DATA_ENV: Record<string, string> = {
+  "next-lite": "",
+  "next-postgres": "DATABASE_URL=postgres://lububble:lububble@db:5432/app\n",
+};
 
 function slugify(name: string): string {
   const trimmed = name.trim();
@@ -46,16 +51,22 @@ export async function listProjects(): Promise<ProjectRecord[]> {
 
 export async function createProject(
   name: string,
+  template = "next-lite",
 ): Promise<{ project: ProjectRecord; ports: { dev: number; prod: number; staging: number } }> {
   const slug = slugify(name);
   const registry = await readRegistry();
   if (registry.some((p) => p.id === slug)) throw new Error(`project "${slug}" already exists`);
+  if (!TEMPLATE_NAMES.has(template)) throw new Error(`unknown template: "${template}"`);
 
   const projectDir = path.join(PROJECTS_DIR, slug);
-  await fs.cp(TEMPLATE_DIR, projectDir, { recursive: true });
+  await fs.cp(path.join(TEMPLATE_ROOT, template), projectDir, { recursive: true });
 
   const ports = await allocatePorts(slug);
-  await fs.writeFile(path.join(projectDir, ".env"), `APP_PORT=${ports.dev}\n`, "utf8");
+  await fs.writeFile(
+    path.join(projectDir, ".env"),
+    `APP_PORT=${ports.dev}\n${TEMPLATE_DATA_ENV[template] ?? ""}`,
+    "utf8",
+  );
   await gitInit(projectDir);
 
   const record: ProjectRecord = {

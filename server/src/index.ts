@@ -43,8 +43,9 @@ export function createApp(): express.Express {
   app.post("/api/projects", async (req, res) => {
     try {
       const name = typeof req.body?.name === "string" ? req.body.name : "";
+      const template = typeof req.body?.template === "string" ? req.body.template : "next-lite";
       if (!name.trim()) return res.status(400).json({ error: "name is required" });
-      const { project, ports } = await createProject(name);
+      const { project, ports } = await createProject(name, template);
       res.status(201).json({ project, ports });
     } catch (e) {
       res.status(400).json({ error: (e as Error).message });

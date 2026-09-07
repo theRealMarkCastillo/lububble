@@ -4,6 +4,7 @@ import { api, type ProjectRecord, type Ports } from "./api";
 export function Dashboard() {
   const [projects, setProjects] = useState<ProjectRecord[] | null>(null);
   const [name, setName] = useState("");
+  const [template, setTemplate] = useState("next-lite");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -18,7 +19,7 @@ export function Dashboard() {
     setBusy(true);
     setError("");
     try {
-      await api.createProject(name);
+      await api.createProject(name, template);
       setName("");
       await refresh();
     } catch (e) {
@@ -47,8 +48,16 @@ export function Dashboard() {
       <div className="dashboard">
         <h2>Your apps</h2>
         <div className="new-project">
+          <select
+            value={template}
+            onChange={(e) => setTemplate(e.target.value)}
+            style={{ width: 200 }}
+          >
+            <option value="next-lite">lite (SQLite-free, no DB)</option>
+            <option value="next-postgres">postgres (default full)</option>
+          </select>
           <input
-            placeholder="Describe your app name, e.g. Habit Tracker"
+            placeholder="Name your app, e.g. Habit Tracker"
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && !busy && create()}

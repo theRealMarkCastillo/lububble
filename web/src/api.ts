@@ -56,8 +56,8 @@ function post(body: unknown): RequestInit {
 export const api = {
   listProjects: () => fetch("/api/projects").then((r) => j<{ projects: ProjectRecord[] }>(r)),
 
-  createProject: (name: string) =>
-    fetch("/api/projects", post({ name })).then((r) => j<{ project: ProjectRecord; ports: Ports }>(r)),
+  createProject: (name: string, template = "next-lite") =>
+    fetch("/api/projects", post({ name, template })).then((r) => j<{ project: ProjectRecord; ports: Ports }>(r)),
 
   deleteProject: (id: string) =>
     fetch(`/api/projects/${id}`, { method: "DELETE" }).then((r) => j<{ ok: boolean }>(r)),
