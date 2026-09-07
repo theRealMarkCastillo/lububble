@@ -131,6 +131,8 @@ export function createApp(): express.Express {
       }),
     };
     await saveConfig(merged);
+    const { killAllAgents } = await import("./agent.js");
+    killAllAgents();
     res.json({ config: redactConfig(merged) });
   });
 

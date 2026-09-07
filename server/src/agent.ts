@@ -50,19 +50,29 @@ async function writeProviderOverride(home: string): Promise<void> {
     "model:",
     `  default: ${provider.model}`,
     "  provider: custom",
-    `  base_url: ${provider.baseUrl}`,
     "providers:",
     "  custom:",
     `    base_url: ${provider.baseUrl}`,
-    `    api_key: ${provider.apiKey}`,
+    "    key_env: LUBUBBLE_API_KEY",
     "",
   ].join("\n");
   await fs.writeFile(path.join(home, "config.yaml"), yaml, { mode: 0o600 });
+  await writeEnvKey(home, provider.apiKey);
+}
+
+async function writeEnvKey(home: string, key: string): Promise<void> {
+  const envPath = path.join(home, ".env");
+  const raw = await fs.readFile(envPath, "utf8").catch(() => "");
+  const filtered = raw
+    .split("\n")
+    .filter((line) => !line.startsWith("LUBUBBLE_API_KEY="));
+  const body = `${filtered.join("\n").replace(/\n+$/, "")}\nLUBUBBLE_API_KEY=${key}\n`;
+  await fs.writeFile(envPath, body, { mode: 0o600 });
 }
 
 export async function writeHermesHome(): Promise<string | null> {
   const profileHome = path.join(HOME_DIR, ".hermes", "profiles", "lububble");
-  if (!existsSync(path.join(profileHome, "config.yaml"))) {
+  if (!existsSync(path.join(profileHome, "config.yaml")) && !existsSync(path.join(profileHome, ".env"))) {
     const created = await run(
       process.env.LUBUBBLE_HERMES_BIN ?? "hermes",
       ["profile", "create", "lububble", "--clone", "--description", "Lububble app-builder agent: builds and runs generated apps via lububble-tools MCP."],
@@ -369,6 +379,13 @@ export function killAgent(projectId: string): void {
   if (!pooled) return;
   if (!pooled.proc.exited) pooled.proc.kill();
   pool.delete(projectId);
+}
+
+export function killAllAgents(): void {
+  for (const [projectId, pooled] of pool) {
+    if (!pooled.proc.exited) pooled.proc.kill();
+    pool.delete(projectId);
+  }
 }
 
 export function poolSize(): number {
