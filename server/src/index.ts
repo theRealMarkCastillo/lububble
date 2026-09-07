@@ -2,7 +2,7 @@ import express from "express";
 import path from "path";
 import multer from "multer";
 import { loadConfig, saveConfig, redactConfig, ConfigSchema, type Config } from "./config.js";
-import { listProjects, createProject, deleteProject, projectDir } from "./projects.js";
+import { listProjects, createProject, deleteProject, projectDir, stopOrphanStacks } from "./projects.js";
 import { getPorts } from "./ports.js";
 import { history, restore } from "./snapshots.js";
 import { run } from "./docker.js";

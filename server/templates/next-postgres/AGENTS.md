@@ -69,3 +69,16 @@ postgres client, emit updates; never poll tables on an interval.
 - Do not publish host ports for the db.
 - File uploads → the `db` stays schema-only; write files to `.data/` and
   serve via an app route.
+
+## Runtime and ports (hard rules)
+
+- This project's dev port is allocated via `APP_PORT` in `.env`. Never change it,
+  never publish any other host port.
+- Operate ONLY this project's own compose project (`lububble-<this project>`).
+  Never stop, start, remove, or reconfigure containers/networks/volumes of any
+  other compose project — including other `lububble-*` stacks.
+- If the app's port is already taken by another stack, do NOT free it. Stop and
+  tell the user about the conflict instead of touching foreign stacks.
+- Never use privileged mode, host namespaces, `container_name`, or mount docker
+  sockets / paths outside this project directory.
+- Files you edit must be inside this project directory.

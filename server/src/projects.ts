@@ -49,6 +49,38 @@ export async function listProjects(): Promise<ProjectRecord[]> {
   return readRegistry();
 }
 
+export async function stopOrphanStacks(): Promise<string[]> {
+  const { run } = await import("./docker.js");
+  const listed = await run("docker", [
+    "ps",
+    "-a",
+    "--filter",
+    "label=com.docker.compose.project",
+    "--format",
+    "{{.Label \"com.docker.compose.project\"}}\t{{.ID}}",
+  ]);
+  if (listed.code !== 0) return [];
+  const registered = new Set(
+    (await listProjects()).flatMap((p) => {
+      const base = `lububble-${p.id.replace(/[^a-z0-9_-]+/g, "-")}`;
+      return [base, `${base}-prod`];
+    }),
+  );
+  const seen = new Map<string, string[]>();
+  for (const line of listed.text.trim().split("\n")) {
+    if (!line) continue;
+    const [project = "", id = ""] = line.split("\t");
+    if (!project.startsWith("lububble-") || registered.has(project)) continue;
+    (seen.get(project) ?? seen.set(project, []).get(project)!).push(id);
+  }
+  const notes: string[] = [];
+  for (const [project, ids] of seen) {
+    const rm = await run("docker", ["rm", "-f", ...ids], { timeoutMs: 120_000 });
+    notes.push(`${project}: removed ${ids.length} orphan container(s) (exit ${rm.code})`);
+  }
+  return notes;
+}
+
 export async function createProject(
   name: string,
   template = "next-lite",
