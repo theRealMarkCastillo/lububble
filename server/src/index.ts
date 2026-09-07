@@ -242,14 +242,38 @@ export function createApp(): express.Express {
       const dir = await projectDir(id);
       const ports = await getPorts(id);
       if (!ports) return res.status(404).json({ error: "unknown project" });
-      const { code, text } = await run("docker", ["compose", "-p", `lububble-${id}-prod`, "-f", "docker-compose.prod.yml", "up", "-d", "--build", "--wait", "--wait-timeout", "180"], {
-        cwd: dir,
-        timeoutMs: 600_000,
-        env: { APP_PORT: String(ports.prod) },
-      });
-      const { text: envOut } = { text: "" };
-      void envOut;
-      res.json({ ok: code === 0, port: ports.prod, url: `http://localhost:${ports.prod}`, output: text.slice(-4000) });
+      const compose = ["compose", "-p", `lububble-${id}-prod`, "-f", "docker-compose.prod.yml"];
+      const up = () =>
+        run("docker", [...compose, "up", "-d", "--build", "--wait", "--wait-timeout", "180"], {
+          cwd: dir,
+          timeoutMs: 600_000,
+          env: { APP_PORT: String(ports.prod) },
+        });
+      let { code, text } = await up();
+      if (code !== 0 && text.includes("port is already allocated")) {
+        await run("docker", [...compose, "down", "--remove-orphans", "--volumes"], {
+          cwd: dir,
+          timeoutMs: 120_000,
+        });
+        ({ code, text } = await up());
+      }
+      let verified = false;
+      let httpStatus = 0;
+      if (code === 0) {
+        const minWait = Date.now() + 15_000;
+        for (;;) {
+          try {
+            const r = await fetch(`http://127.0.0.1:${ports.prod}`, { signal: AbortSignal.timeout(5_000) });
+            httpStatus = r.status;
+            verified = r.ok;
+          } catch {
+            httpStatus = 0;
+          }
+          if (verified || Date.now() > minWait) break;
+          await new Promise((r) => setTimeout(r, 2_000));
+        }
+      }
+      res.json({ ok: code === 0, port: ports.prod, url: `http://localhost:${ports.prod}`, httpStatus, verified, output: text.slice(-4000) });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
     }
