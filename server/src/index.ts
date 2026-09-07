@@ -72,6 +72,43 @@ export function createApp(): express.Express {
     }
   });
 
+  app.get("/api/projects/:id/files", async (req, res) => {
+    try {
+      const dir = await projectDir(req.params.id);
+      const { walk } = await import("./walk.js");
+      res.json({ files: await walk(dir, dir) });
+    } catch (e) {
+      res.status(400).json({ error: (e as Error).message });
+    }
+  });
+
+  app.get("/api/projects/:id/file", async (req, res) => {
+    try {
+      const dir = await projectDir(req.params.id);
+      const rel = String(req.query.path ?? "");
+      const target = path.resolve(dir, rel);
+      if (!target.startsWith(dir + path.sep)) return res.status(400).json({ error: "path escapes project" });
+      res.type("text/plain").send(await (await import("fs/promises")).readFile(target, "utf8"));
+    } catch {
+      res.status(404).json({ error: "not found" });
+    }
+  });
+
+  app.put("/api/projects/:id/file", async (req, res) => {
+    try {
+      const dir = await projectDir(req.params.id);
+      const rel = String(req.query.path ?? "");
+      const target = path.resolve(dir, rel);
+      if (!target.startsWith(dir + path.sep)) return res.status(400).json({ error: "path escapes project" });
+      const fs = await import("fs/promises");
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, req.body?.content ?? "", "utf8");
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(400).json({ error: (e as Error).message });
+    }
+  });
+
   app.get("/api/projects/:id/history", async (req, res) => {
     const dir = await projectDir(req.params.id);
     res.json({ history: await history(dir) });
@@ -188,7 +225,9 @@ export function createApp(): express.Express {
       }
       res.end();
     } catch {
-      res.status(502).json({ error: "app container not reachable (is the stack up?)" });
+      res.status(502).type("html").send(`<!doctype html>
+<html><head><meta charset="utf-8"><style>body{font-family:ui-sans-serif,system-ui;background:#0b0b0d;color:#9a9aa6;display:flex;align-items:center;justify-content:center;height:100vh;font-size:13px}code{color:#7fbf7f}</style></head>
+<body><div>dev stack not running for this project yet.<br/>Ask the agent to build &amp; run it, or use <code>compose_up</code> from chat.</div></body></html>`);
     }
   }) as express.RequestHandler);
 
