@@ -13,8 +13,37 @@ integration. One `compose up` owns the app and its backend; teardown removes it.
 | Profile | Services | Use when |
 |---|---|---|
 | `sqlite` | web only (SQLite file in a mount) | tiny apps, CRUD-lite |
-| `postgres` (default full) | web + postgres:17-alpine | anything with users/data |
-| `postgres+redis` | web + postgres + redis:7-alpine | jobs, caching, rate limits |
+| `postgres` (default full) | web + pgvector/pgvector:pg17 | anything with users/data |
+| `postgres+redis` (**escalation**) | web + postgres + redis:7 | explicit escalation only |
+
+**Redis is NOT in the default stack.** Queues, cache, pub/sub and
+rate-limiting are Postgres-native (see "Data plane standards"). Redis is
+added only when the app genuinely needs out-of-process serialization
+(fan-out at scale, external workers) — that is a spec change, not a
+per-project habit (2019-era default).
+
+## Data plane standards (Postgres-native replacements for the "usual infra")
+
+| Concern | Standard implementation |
+|---|---|
+| Background jobs | `jobs` table: `SELECT ... FOR UPDATE SKIP LOCKED` claim loop in an app-level worker + `pg_notify()` to wake claimers instantly. LLM guidance: idempotent job functions, `attempts`/`max_attempts`, `run_at`, claimed_by/claimed_at. Do NOT reach for Celery/BullMQ. |
+| Scheduled work | Long-running node loop / `setInterval` worker in the web container bootstrapping from `jobs WHERE run_at <= now()`; `pg_cron` only via escalation (not in base image) |
+| Pub/Sub (live updates) | `pg_notify()/LISTEN` bridged through the app to SSE via Next.js route handlers |
+| Rate limiting | counters table upsert (`rate_limit_counter`), no Redis |
+| App cache | materialized views for read models (`REFRESH` on a job); memoization container pass |
+| Embeddings / semantic search | `vector` + HNSW (`vector_cosine_ops`) |
+| Structured semantic graph (SPO triples) | `triples(subject, predicate, object)` with trgm indexes over s/p/o (via pg_trgm `%`/`similarity()`) for consumers; `vector` index over object embedding for hard matches; store p as a controlled vocabulary (text enum table) not free text |
+| Full text search | Postgres FTS (`tsv`) + trgm for suggestions; no OpenSearch |
+
+These "one boring engine covers the data plane" choices are what keep the
+generated apps reviewable and lean like you asked. They also match the
+actual post-Supabase trend (oneshot pgmq-style queues), so both standard
+and skill guidance for generated apps stay portable.
+
+## Storage and reference semantic SPO index (normative-prompt context)
+
+The agent MUST use trigram indexes for subject/predicate/object similarity
+match queries (GIN over lower/normalized columns), not raw `ILIKE` alone.
 
 ## Conventions (normative)
 
