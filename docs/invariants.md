@@ -18,6 +18,7 @@ Adopted from software-factory practice.
 | INV-10 | Project names must start with a letter/number and contain only letters, numbers, spaces, `_`, `-`; names are rejected, never silently mutated | projects.ts `slugify` | server test (covered) |
 | INV-11 | API keys are stored 0600 in `~/.lububble/config.json`, never returned unmasked through the API, never logged | config.ts | (unit pending) |
 | INV-12 | Teardown is unconditional: compose op always attempts `down` even after a failed `up`, and foreign-change detection runs even on failure paths | index.ts `record()` + try/finally structure | (pending) |
+| INV-13 | Project isolation boundary: **runtime** isolation is hard (per-project compose networks/volumes/ports, INV-1/4/5); **agent** fs boundary is VM-phase work (design = containerized hermes agent with project-dir-only mounts). Until then soft guards apply (cwd-pinned agents, per-project sessions, git snapshots, AGENTS.md scope) | docs/isolation.md | pending VM phase |
 
 ## Pending unit coverage (next batch)
 
