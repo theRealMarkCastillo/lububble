@@ -4,7 +4,7 @@ Local-first AI app builder. Chat to build apps like Lovable — but everything r
 machine with Docker Compose. Any OpenAI-format LLM endpoint (URL + model + key), any
 ACP-speaking agent. See [PLAN.md](./PLAN.md) for the full plan.
 
-<img width="224" height="77" alt="image" src="https://github.com/user-attachments/assets/89d59f55-523b-4910-a22f-6b05507debbc" />
+<img width="899" height="713" alt="image" src="https://github.com/user-attachments/assets/e978659c-aa46-433a-930e-8ad08854ff47" />
 
 
 ## Status
