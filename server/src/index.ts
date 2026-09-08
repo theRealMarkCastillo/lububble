@@ -5,8 +5,8 @@ import { loadConfig, saveConfig, redactConfig, ConfigSchema, type Config } from 
 import { listProjects, createProject, deleteProject, projectDir, stopOrphanStacks } from "./projects.js";
 import { getPorts } from "./ports.js";
 import { history, restore } from "./snapshots.js";
-import { run } from "./docker.js";
-import { PROJECTS_DIR } from "./paths.js";
+import { composeActionForProject } from "./docker.js";
+import { resolveProjectPath } from "./paths.js";
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -44,14 +44,12 @@ async function resolveAttachments(
   if (!Array.isArray(raw)) return [];
   const fs = await import("fs/promises");
   const dir = await projectDir(projectId);
-  const base = path.resolve(dir, ".uploads");
   const out: import("./agent.js").PromptAttachment[] = [];
   for (const item of raw.slice(0, 6)) {
     if (!item || typeof item.name !== "string" || !/^[a-zA-Z0-9._-]+$/.test(item.name)) continue;
-    const abs = path.resolve(base, item.name);
-    if (!abs.startsWith(base + path.sep)) continue;
+    const abs = await resolveProjectPath(dir, path.posix.join(".uploads", item.name), "attachment").catch(() => "");
+    if (!abs) continue;
     const meta = imageMetaById(item.name);
-    const absUnchecked = abs;
     const exists = await fs
       .access(abs)
       .then(() => true)
@@ -87,6 +85,7 @@ export function createApp(): express.Express {
         const name = `${Date.now()}-${clean}`;
         const dest = path.join(dir, ".uploads", name);
         await (await import("fs/promises")).mkdir(path.dirname(dest), { recursive: true });
+        await resolveProjectPath(dir, path.posix.join(".uploads", name), "upload");
         await (await import("fs/promises")).writeFile(dest, req.file.buffer, { mode: 0o600 });
         const { isImage, mimeType } = imageMetaById(name);
         await ensureUploadsIgnored(dir);
@@ -101,10 +100,7 @@ export function createApp(): express.Express {
     try {
       if (!/^[a-zA-Z0-9._-]+$/.test(String(req.params.name))) return res.status(400).json({ error: "bad name" });
       const dir = await projectDir(req.params.id);
-      const target = path.resolve(dir, ".uploads", String(req.params.name));
-      if (!target.startsWith(path.resolve(dir, ".uploads") + path.sep)) {
-        return res.status(400).json({ error: "path escapes project" });
-      }
+      const target = await resolveProjectPath(dir, path.posix.join(".uploads", String(req.params.name)), "upload read");
       const fs = await import("fs/promises");
       const mime = imageMetaById(String(req.params.name)).mimeType ?? "application/octet-stream";
       res.type(mime).send(await fs.readFile(target));
@@ -186,8 +182,7 @@ export function createApp(): express.Express {
     try {
       const dir = await projectDir(req.params.id);
       const rel = String(req.query.path ?? "");
-      const target = path.resolve(dir, rel);
-      if (!target.startsWith(dir + path.sep)) return res.status(400).json({ error: "path escapes project" });
+      const target = await resolveProjectPath(dir, rel, "read_file");
       res.type("text/plain").send(await (await import("fs/promises")).readFile(target, "utf8"));
     } catch {
       res.status(404).json({ error: "not found" });
@@ -199,9 +194,10 @@ export function createApp(): express.Express {
       const dir = await projectDir(req.params.id);
       const rel = String(req.query.path ?? "");
       const target = path.resolve(dir, rel);
-      if (!target.startsWith(dir + path.sep)) return res.status(400).json({ error: "path escapes project" });
+      if (target === dir || !target.startsWith(dir + path.sep)) return res.status(400).json({ error: "path escapes project" });
       const fs = await import("fs/promises");
       await fs.mkdir(path.dirname(target), { recursive: true });
+      await resolveProjectPath(dir, rel, "write_file");
       await fs.writeFile(target, req.body?.content ?? "", "utf8");
       res.json({ ok: true });
     } catch (e) {
@@ -225,14 +221,8 @@ export function createApp(): express.Express {
       const dir = await projectDir(id);
       const ports = await getPorts(id);
       if (!ports) return res.status(404).json({ error: "unknown project" });
-      const { composeProjectName } = await import("@lububble/mcp-tools/dist/policy.js");
-      const { validateComposeFiles } = await import("./docker.js");
-      await validateComposeFiles(dir, ["docker-compose.yml"]);
-      const { code, text } = await run("docker", ["compose", "-p", composeProjectName(id), "-f", "docker-compose.yml", "up", "-d", "--build", "--wait", "--wait-timeout", "180"], {
-        cwd: dir,
-        timeoutMs: 600_000,
-      });
-      res.json({ ok: code === 0, url: `http://localhost:${ports.dev}`, output: text.slice(-3000) });
+      const result = await composeActionForProject("compose_up", dir, { env: { APP_PORT: String(ports.dev) } });
+      res.json({ ok: result.ok, url: `http://localhost:${ports.dev}`, output: result.output.slice(-3000) });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
     }
@@ -244,24 +234,16 @@ export function createApp(): express.Express {
       const dir = await projectDir(id);
       const ports = await getPorts(id);
       if (!ports) return res.status(404).json({ error: "unknown project" });
-      const compose = ["compose", "-p", `lububble-${id}-prod`, "-f", "docker-compose.prod.yml"];
-      const up = () =>
-        run("docker", [...compose, "up", "-d", "--build", "--wait", "--wait-timeout", "180"], {
-          cwd: dir,
-          timeoutMs: 600_000,
-          env: { APP_PORT: String(ports.prod) },
-        });
-      let { code, text } = await up();
-      if (code !== 0 && text.includes("port is already allocated")) {
-        await run("docker", [...compose, "down", "--remove-orphans", "--volumes"], {
-          cwd: dir,
-          timeoutMs: 120_000,
-        });
-        ({ code, text } = await up());
+      const projectName = `lububble-${id}-prod`;
+      const options = { files: ["docker-compose.prod.yml"], projectName, env: { APP_PORT: String(ports.prod) } };
+      let result = await composeActionForProject("compose_up", dir, options);
+      if (!result.ok && result.output.includes("port is already allocated")) {
+        await composeActionForProject("compose_down", dir, { ...options, removeVolumes: false });
+        result = await composeActionForProject("compose_up", dir, options);
       }
       let verified = false;
       let httpStatus = 0;
-      if (code === 0) {
+      if (result.ok) {
         const minWait = Date.now() + 15_000;
         for (;;) {
           try {
@@ -275,7 +257,7 @@ export function createApp(): express.Express {
           await new Promise((r) => setTimeout(r, 2_000));
         }
       }
-      res.json({ ok: code === 0, port: ports.prod, url: `http://localhost:${ports.prod}`, httpStatus, verified, output: text.slice(-4000) });
+      res.json({ ok: result.ok, port: ports.prod, url: `http://localhost:${ports.prod}`, httpStatus, verified, output: result.output.slice(-4000) });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
     }
@@ -285,11 +267,12 @@ export function createApp(): express.Express {
     try {
       const id = req.params.id;
       const dir = await projectDir(id);
-      const { code, text } = await run("docker", ["compose", "-p", `lububble-${id}-prod`, "-f", "docker-compose.prod.yml", "down", "--remove-orphans"], {
-        cwd: dir,
-        timeoutMs: 120_000,
+      const result = await composeActionForProject("compose_down", dir, {
+        files: ["docker-compose.prod.yml"],
+        projectName: `lububble-${id}-prod`,
+        removeVolumes: false,
       });
-      res.json({ ok: code === 0, output: text.slice(-2000) });
+      res.json({ ok: result.ok, output: result.output.slice(-2000) });
     } catch (e) {
       res.status(400).json({ error: (e as Error).message });
     }
@@ -298,13 +281,13 @@ export function createApp(): express.Express {
   app.get("/api/projects/:id/logs", async (req, res) => {
     const id = req.params.id;
     if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) return res.status(400).json({ error: "invalid id" });
-    const dir = path.join(PROJECTS_DIR, id);
-    const { composeProjectName } = await import("@lububble/mcp-tools/dist/policy.js");
-    const { code, text } = await run("docker", ["compose", "-p", composeProjectName(id), "logs", "--tail", "200"], {
-      cwd: dir,
-      timeoutMs: 60_000,
-    });
-    res.type("text/plain").send(code === 0 ? text : `docker compose logs failed (exit ${code})\n${text}`);
+    try {
+      const dir = await projectDir(id);
+      const result = await composeActionForProject("compose_logs", dir);
+      res.type("text/plain").send(result.ok ? result.output : `docker compose logs failed\n${result.output}`);
+    } catch (e) {
+      res.status(404).json({ error: (e as Error).message });
+    }
   });
 
   app.get("/api/projects/:id/chat", async (req, res) => {

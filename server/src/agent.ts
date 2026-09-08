@@ -7,7 +7,7 @@ import { promises as fs } from "fs";
 import { existsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { CONFIG_DIR, HOME_DIR } from "./paths.js";
+import { CONFIG_DIR, HOME_DIR, resolveProjectPath } from "./paths.js";
 
 const MAX_ITERATIONS = 3;
 const PROMPT_TIMEOUT_MS = 15 * 60_000;
@@ -95,6 +95,24 @@ interface PooledAgent {
 }
 
 const pool = new Map<string, PooledAgent>();
+const promptQueues = new Map<string, Promise<void>>();
+
+async function queuePrompt<T>(projectId: string, fn: () => Promise<T>): Promise<T> {
+  const prior = promptQueues.get(projectId) ?? Promise.resolve();
+  let release: () => void = () => {};
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = prior.catch(() => {}).then(() => current);
+  promptQueues.set(projectId, queued);
+  await prior.catch(() => {});
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (promptQueues.get(projectId) === queued) promptQueues.delete(projectId);
+  }
+}
 
 const idleSweeper = setInterval(() => {
   const now = Date.now();
@@ -238,6 +256,15 @@ export async function runAgent(
   attachments: PromptAttachment[] = [],
   onUpdate?: (event: AgentEvent) => void,
 ): Promise<AgentRunResult> {
+  return queuePrompt(projectId, () => runAgentSerial(projectId, text, attachments, onUpdate));
+}
+
+async function runAgentSerial(
+  projectId: string,
+  text: string,
+  attachments: PromptAttachment[] = [],
+  onUpdate?: (event: AgentEvent) => void,
+): Promise<AgentRunResult> {
   if (!(await listProjects()).some((p) => p.id === projectId)) {
     throw new Error(`unknown project: ${projectId}`);
   }
@@ -265,7 +292,8 @@ export async function runAgent(
       collected.push(u);
       onUpdate?.({ kind: "update", attempt, payload: u });
     };
-    pooled_.proc.updates.on("update", listener);
+    const promptProc = pooled_.proc;
+    promptProc.updates.on("update", listener);
     let thrown: Error = new Error("agent ended turn without completion");
     try {
       const result = (await pooled_.proc.request(
@@ -296,7 +324,7 @@ export async function runAgent(
         }
       }
     } finally {
-      pooled_.proc.updates.removeListener("update", listener);
+      promptProc.updates.removeListener("update", listener);
     }
     lastError = thrown;
     if (attempt >= MAX_ITERATIONS) break;
@@ -317,7 +345,7 @@ async function buildPromptBlocks(
   const fs = await import("fs");
   for (const att of attachments) {
     if (att.isImage && att.mimeType) {
-      const data = await fs.promises.readFile(path.join(dir, att.path), "base64");
+      const data = await fs.promises.readFile(await resolveProjectPath(dir, att.path, "attachment"), "base64");
       blocks.push({ type: "image", data, mimeType: att.mimeType });
     } else {
       blocks.push({

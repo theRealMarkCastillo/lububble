@@ -29,6 +29,16 @@ interface ComposeService {
   [key: string]: unknown;
 }
 
+function bindSources(svc: ComposeService): string[] {
+  const volumes = (svc["volumes"] as unknown[] | undefined) ?? [];
+  return volumes.flatMap((volume) => {
+    if (typeof volume === "string") return [volume.split(":")[0]];
+    if (!volume || typeof volume !== "object") return [];
+    const spec = volume as { type?: unknown; source?: unknown };
+    return spec.type === "bind" && typeof spec.source === "string" ? [spec.source] : [];
+  });
+}
+
 function checkBindSource(projectDir: string, source: string): void {
   if (source === "/var/run/docker.sock") {
     throw new PolicyViolation("docker socket mounts are not allowed");
@@ -85,11 +95,7 @@ function assertServiceSafe(name: string, svc: ComposeService, projectDir: string
     }
   }
   if (projectDir !== undefined) {
-    const volumes = (svc["volumes"] as string[] | undefined) ?? [];
-    for (const vol of volumes) {
-      const source = vol.split(":")[0];
-      checkBindSource(projectDir, source);
-    }
+    for (const source of bindSources(svc)) checkBindSource(projectDir, source);
   }
   const ports = (svc["ports"] as unknown[] | undefined) ?? [];
   for (const p of ports) {
@@ -116,5 +122,36 @@ export async function validateComposeFiles(projectDir: string, files: string[]):
     const raw = await fs.readFile(target, "utf8");
     const parsed = YAML.parse(raw) as ComposeDoc | null;
     assertSafeComposeFile(parsed, projectDir);
+    await assertBindSourcesResolveInsideProject(parsed, projectDir);
+  }
+}
+
+async function assertBindSourcesResolveInsideProject(doc: ComposeDoc | null, projectDir: string): Promise<void> {
+  if (!doc || typeof doc !== "object") return;
+  const root = await fs.realpath(projectDir);
+  for (const service of Object.values(doc.services ?? {})) {
+    for (const source of bindSources(service)) {
+      if (!source.startsWith("/") && source !== "." && source !== ".." && !source.startsWith("./") && !source.startsWith("../")) continue;
+      const candidate = source.startsWith("/") ? source : path.resolve(projectDir, source);
+      const resolved = await nearestRealPath(candidate);
+      const rel = path.relative(root, resolved);
+      if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+        throw new PolicyViolation(`bind mount resolves outside project directory: ${source}`);
+      }
+    }
+  }
+}
+
+async function nearestRealPath(target: string): Promise<string> {
+  let current = target;
+  for (;;) {
+    try {
+      return await fs.realpath(current);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+      const parent = path.dirname(current);
+      if (parent === current) throw e;
+      current = parent;
+    }
   }
 }

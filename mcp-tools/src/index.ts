@@ -18,6 +18,25 @@ function resolveScope(rel: string, action: string): string {
   return target;
 }
 
+async function assertRealScope(target: string, action: string): Promise<void> {
+  const root = await fs.realpath(WORKSPACE_ROOT);
+  let current = target;
+  for (;;) {
+    try {
+      const resolved = await fs.realpath(current);
+      if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+        throw new Error(`${action} path escapes workspace root through a symlink`);
+      }
+      return;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+      const parent = path.dirname(current);
+      if (parent === current) throw e;
+      current = parent;
+    }
+  }
+}
+
 function toolResult(ok: boolean, output: string) {
   return {
     isError: !ok,
@@ -34,6 +53,7 @@ export function createServer() {
     { path: z.string().default(".") },
     async ({ path: p }) => {
       const target = resolveScope(p, "list_files");
+      await assertRealScope(target, "list_files");
       const walk = async (dir: string, prefix: string): Promise<string[]> => {
         const entries = await fs.readdir(dir, { withFileTypes: true });
         const out: string[] = [];
@@ -56,6 +76,7 @@ export function createServer() {
     { path: z.string() },
     async ({ path: p }) => {
       const target = resolveScope(p, "read_file");
+      await assertRealScope(target, "read_file");
       const text = await fs.readFile(target, "utf8");
       return { content: [{ type: "text", text }] };
     },
@@ -68,6 +89,7 @@ export function createServer() {
     async ({ path: p, content }) => {
       const target = resolveScope(p, "write_file");
       await fs.mkdir(path.dirname(target), { recursive: true });
+      await assertRealScope(target, "write_file");
       await fs.writeFile(target, content, "utf8");
       return { content: [{ type: "text", text: `wrote ${p} (${content.length} bytes)` }] };
     },
@@ -78,7 +100,9 @@ export function createServer() {
     "Delete a file (workspace-relative path)",
     { path: z.string() },
     async ({ path: p }) => {
-      await fs.rm(resolveScope(p, "delete_file"));
+      const target = resolveScope(p, "delete_file");
+      await assertRealScope(target, "delete_file");
+      await fs.rm(target);
       return { content: [{ type: "text", text: `deleted ${p}` }] };
     },
   );
@@ -150,7 +174,11 @@ export function createServer() {
     { url: z.string().url(), expect_status: z.number().int().min(100).max(599).default(200) },
     async ({ url, expect_status }) => {
       try {
-        const res = await fetch(url, { redirect: "follow" });
+        const target = new URL(url);
+        if (!isLoopbackHost(target.hostname)) {
+          return { isError: true, content: [{ type: "text", text: "http_check only permits loopback URLs" }] };
+        }
+        const res = await fetch(url, { redirect: "error" });
         const body = (await res.text()).slice(0, 1500);
         return {
           content: [{ type: "text", text: `status=${res.status} expected=${expect_status}\n---\n${body}` }],
@@ -163,6 +191,10 @@ export function createServer() {
   );
 
   return server;
+}
+
+export function isLoopbackHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
 }
 
 export async function startStdio() {

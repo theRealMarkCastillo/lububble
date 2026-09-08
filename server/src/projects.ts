@@ -3,7 +3,7 @@ import path from "path";
 import { z } from "zod";
 import { PROJECTS_DIR, PROJECT_REGISTRY_FILE } from "./paths.js";
 import { allocatePorts, releasePorts, getPorts } from "./ports.js";
-import { composeDown, validateComposeFiles } from "./docker.js";
+import { composeDown, guardedDocker } from "./docker.js";
 import { gitInit } from "./snapshots.js";
 import { fileURLToPath } from "url";
 
@@ -50,8 +50,7 @@ export async function listProjects(): Promise<ProjectRecord[]> {
 }
 
 export async function stopOrphanStacks(): Promise<string[]> {
-  const { run } = await import("./docker.js");
-  const listed = await run("docker", [
+  const listed = await guardedDocker("orphan_sweep_list", "orphan-sweep", [
     "ps",
     "-a",
     "--filter",
@@ -59,7 +58,7 @@ export async function stopOrphanStacks(): Promise<string[]> {
     "--format",
     "{{.Label \"com.docker.compose.project\"}}\t{{.ID}}",
   ]);
-  if (listed.code !== 0) return [];
+  if (!listed.ok) return [];
   const registered = new Set(
     (await listProjects()).flatMap((p) => {
       const base = `lububble-${p.id.replace(/[^a-z0-9_-]+/g, "-")}`;
@@ -67,7 +66,7 @@ export async function stopOrphanStacks(): Promise<string[]> {
     }),
   );
   const seen = new Map<string, string[]>();
-  for (const line of listed.text.trim().split("\n")) {
+  for (const line of listed.output.trim().split("\n")) {
     if (!line) continue;
     const [project = "", id = ""] = line.split("\t");
     if (!project.startsWith("lububble-") || registered.has(project)) continue;
@@ -75,8 +74,8 @@ export async function stopOrphanStacks(): Promise<string[]> {
   }
   const notes: string[] = [];
   for (const [project, ids] of seen) {
-    const rm = await run("docker", ["rm", "-f", ...ids], { timeoutMs: 120_000 });
-    notes.push(`${project}: removed ${ids.length} orphan container(s) (exit ${rm.code})`);
+    const rm = await guardedDocker("orphan_sweep_remove", project, ["rm", "-f", ...ids], { timeoutMs: 120_000 });
+    notes.push(`${project}: removed ${ids.length} orphan container(s) (exit ${rm.exitCode ?? "?"})`);
   }
   return notes;
 }

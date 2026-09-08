@@ -3,6 +3,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { composeAction, record, resolveScope, type ComposeDeps } from "./compose.js";
+import { isLoopbackHost } from "./index.js";
 import { composeProjectName, PolicyViolation } from "./policy.js";
 import { diffSnapshots, type ContainerRecord, type Snapshot } from "./snapshot.js";
 import { mkdir, rm, writeFile } from "node:fs/promises";
@@ -147,6 +148,22 @@ test("INV-8: absolute paths are rejected", () => {
 test("INV-8: inside-project paths resolve under root", () => {
   const target = resolveScope("/tmp/ws", "sub/dir/file.txt", "read_file");
   assert.ok(target.startsWith("/tmp/ws" + path.sep));
+});
+
+test("INV-8: compose files cannot escape their project directory", async () => {
+  const deps = fakeDeps();
+  await assert.rejects(
+    () => composeAction("compose_up", { project_dir: "demo", files: ["../outside/docker-compose.yml"] }, deps),
+    /escapes workspace root|compose file must be below project directory/,
+  );
+  assert.equal(deps.dockerCalls.length, 0);
+});
+
+test("http_check only permits loopback hosts", () => {
+  assert.equal(isLoopbackHost("localhost"), true);
+  assert.equal(isLoopbackHost("127.0.0.1"), true);
+  assert.equal(isLoopbackHost("[::1]"), true);
+  assert.equal(isLoopbackHost("example.com"), false);
 });
 
 test("INV-5: composeProjectName always namespaced and slugged", () => {

@@ -29,6 +29,13 @@ test("compose rejects docker socket mount", () => {
   );
 });
 
+test("compose rejects long-form bind mounts outside the project", () => {
+  assert.throws(
+    () => assertSafeComposeFile({ services: { app: { volumes: [{ type: "bind", source: "/etc", target: "/host" }] } } }, "/proj/app"),
+    PolicyViolation,
+  );
+});
+
 test("compose rejects escape mount", () => {
   assert.throws(() => assertSafeComposeFile({ services: { app: { volumes: ["../../etc:/host"] } } }, "/proj/app"), PolicyViolation);
 });
